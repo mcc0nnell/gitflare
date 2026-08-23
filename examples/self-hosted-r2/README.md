@@ -137,11 +137,21 @@ push SHA A
   -> git fsck passes
 ```
 
+The repository includes the same test as an executable script:
+
+```bash
+BASE_URL=https://git.example.com \
+GITFLARE_GIT_TOKEN=... \
+GITFLARE_ADMIN_TOKEN=... \
+npm run proof:persistence
+```
+
 ## Current v0 boundaries
 
 This is a correctness-first vertical slice, not the final storage format.
 
 - one full gzip checkpoint per acknowledged push
+- a v0 checkpoint uses one R2 `put`, so a checkpoint must remain within R2's single-upload object limit; multipart/incremental checkpoints are a later step
 - all control operations for a repository are serialized by its DO
 - reads use standard Git smart HTTP
 - Git runs only on local POSIX disk
