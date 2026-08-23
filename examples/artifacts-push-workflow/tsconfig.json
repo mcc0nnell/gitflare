@@ -10,7 +10,7 @@
     "noEmit": true,
     "skipLibCheck": true,
     "strict": true,
-    "types": ["@cloudflare/workers-types"]
+    "types": ["@cloudflare/workers-types", "@types/node"]
   },
   "include": ["src/**/*.ts", "cloudflare.ci.ts", "env.ts", "worker-configuration.d.ts"]
 }
