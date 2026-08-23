@@ -6,7 +6,7 @@
   "scripts": {
     "build": "wrangler deploy --dry-run --containers-rollout=none",
     "dev": "wrangler dev",
-    "typecheck": "wrangler types --check --include-runtime false --strict-vars false --env-interface CloudflareBindings && tsc --noEmit",
+    "typecheck": "wrangler types --include-runtime false --strict-vars false --env-interface CloudflareBindings && tsc --noEmit",
     "cf-typegen": "wrangler types --include-runtime false --strict-vars false --env-interface CloudflareBindings",
     "deploy": "wrangler deploy"
   },
@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260818.1",
+    "@types/node": "24.12.0",
     "typescript": "5.9.3",
     "wrangler": "4.124.0"
   }
