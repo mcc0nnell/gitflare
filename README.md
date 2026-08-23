@@ -1,94 +1,122 @@
 # Gitflare
 
-Git should be boring. Cloudflare should do the work.
+**Git should be boring. Cloudflare should do the work.**
 
-Gitflare is a minimal source-control control plane designed to run naturally on Cloudflare.
+Gitflare is an independent experiment in building a very small software forge around **Cloudflare Artifacts**.
 
-The intended separation is:
+Cloudflare already supplies the missing Git primitive: Artifacts repositories have durable Git history and refs, standard smart-HTTP remotes, repo-scoped tokens, Workers and REST control-plane APIs, and repository push events. Gitflare does **not** reimplement Git storage, pack negotiation, refs, or `git-http-backend`.
 
-```text
-GIT        = source of truth
-CLOUDFLARE = execution + state + delivery
-```
+Instead, Gitflare asks a narrower question:
 
-The goal is not to recreate GitHub, GitLab, or another giant software forge.
-Gitflare should provide the smallest useful source-control layer, while delegating execution, storage, coordination, deployment, identity, and delivery to Cloudflare-native infrastructure.
-
-## Conceptual architecture
+> What is the smallest useful collaboration and automation layer you can put around a Cloudflare Artifacts repository?
 
 ```text
-Developer
-    │
-    │ clone / fetch / push
-    ▼
+Humans / agents
+      |
+      | normal Git
+      v
+Cloudflare Artifacts
+Git history / refs / clone / fetch / push
+      |
+      | repo events
+      v
 Gitflare
-minimal Git control plane
-    │
-    ├── repositories
-    ├── refs
-    ├── branches
-    ├── tags
-    ├── review objects
-    ├── statuses
-    └── events
-             │
-             ▼
-        Cloudflare
-             │
-   ┌─────────┼─────────────┐
-   ▼         ▼             ▼
-Workers   Workflows    Containers
-   │         │             │
-   ├─────────┴──────┬──────┘
-   ▼                ▼
-  D1               R2
-metadata      Git objects/artifacts
-   │
-   ▼
-Durable Objects
-coordination
+policy / reviews / statuses / handoff
+      |
+      v
+Cloudflare Workflows + Sandbox / Containers
+      |
+      v
+build / test / evidence / deploy
 ```
 
-## What Gitflare is not
+## Why
 
-Gitflare is not intended to reproduce:
+GitHub is excellent as a social forge because everyone is already there. It does not need to be the execution authority.
 
-- GitHub Actions
-- GitLab CI
-- Jira
-- project boards
-- package marketplaces
-- social coding feeds
-- wiki platforms
-- giant plugin ecosystems
+Gitflare is designed so a project can keep GitHub for discovery, pull requests, discussion, and contribution while Cloudflare owns the machine path underneath it.
 
-Cloudflare already provides much of the execution plane.
-Gitflare should provide the missing SCM primitive.
+A GitHub repository can therefore be a public collaboration mirror of the same project while Cloudflare Artifacts is the source plane consumed by agents and Cloudflare-native automation.
 
-A developer should eventually be able to run:
+## What Artifacts already gives us
+
+- isolated Git repositories inside namespaces
+- standard Git clone, fetch, pull, and push over HTTPS
+- durable history and refs
+- repo-scoped read/write tokens
+- Workers binding and REST control-plane APIs
+- repository import/fork operations
+- `cf.artifacts.repo.pushed` events for Cloudflare-native automation
+
+That means the old plan to build Git object storage in R2, ref tables in D1, and a ref coordinator in Durable Objects is intentionally retired.
+
+## What Gitflare owns
+
+Gitflare should stay thin:
+
+- repository policy and conventions
+- human/agent identity mapping
+- short-lived credential issuance policy
+- review/change objects where a GitHub-style PR is unavailable or undesirable
+- commit/check statuses
+- source-provider adapters and mirroring
+- Workflow/Sandbox/Container handoff
+- evidence and deployment links
+
+It should **not** become another giant forge.
+
+## First executable slice
+
+The repository now contains a minimal Worker control API over an Artifacts namespace.
+
+```text
+GET  /healthz
+GET  /repos
+POST /repos
+POST /repos/:repo/tokens
+```
+
+All non-health routes require a `GITFLARE_ADMIN_TOKEN` Worker secret.
+The API defaults to short-lived read credentials and requires write scope to be requested explicitly.
+
+Bootstrap locally or in a Cloudflare-enabled development environment:
 
 ```bash
-git clone https://git.example.com/org/repo.git
-git fetch
-git push
+npm install
+npx wrangler secret put GITFLARE_ADMIN_TOKEN
+npm run check
+npm run dev
 ```
 
-without a proprietary client.
+The Worker config binds `ARTIFACTS` to the `gitflare` namespace.
 
-## Product contract
+## Dogfood
 
-- [Principles](docs/principles.md) — why the control plane stays small
-- [Architecture](docs/architecture.md) — Cloudflare mapping and technical discipline
-- [MVP](docs/mvp.md) — first vertical slice and the end-to-end demonstration
+SCUMM3 is the first real dogfood workload. Its current migration mirrors Git history into a Cloudflare Artifacts repository and runs an isolated Cloudflare-native CI lane from Artifacts. GitHub remains the collaboration surface while the execution plane moves underneath it.
 
-## Current status
+The intended proof is simple:
 
-This repository currently holds the architecture and product contract.
-There is no application framework here yet.
+```text
+GitHub contribution
+      -> Cloudflare Artifacts repository
+      -> repo pushed event
+      -> Cloudflare CI
+      -> Sandbox validation
+      -> evidence / deployment
+      -> status back to the human surface
+```
 
-The first engineering spike is not Git smart HTTP.
-It is the repository record, immutable object storage, ref model, and repository coordinator.
-See [docs/mvp.md](docs/mvp.md).
+## Status
+
+Gitflare is experimental and Cloudflare Artifacts is currently a closed beta. This repository is public so the architecture, implementation choices, and dogfood lessons can be developed in the open.
+
+Gitflare is not an official Cloudflare project and is not affiliated with or endorsed by Cloudflare, Inc.
+
+## Project contract
+
+- [Principles](docs/principles.md)
+- [Architecture](docs/architecture.md)
+- [MVP](docs/mvp.md)
 
 ## License
 
