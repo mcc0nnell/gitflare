@@ -1,15 +1,50 @@
 # Source
 
-This directory is intentionally empty of application code.
+Gitflare starts with a deliberately small Worker control plane over Cloudflare Artifacts.
 
-The first commit establishes the architecture and product contract, not a generated Worker or Git protocol stack.
+`src/index.ts` currently provides:
 
-The first implementation that belongs here is the spike in [docs/mvp.md](../docs/mvp.md):
+- `GET /healthz`
+- `GET /repos`
+- `POST /repos`
+- `POST /repos/:repo/tokens`
 
-- repository records
-- immutable object storage
-- ref model
-- repository coordinator (compare-and-swap)
+All repository operations are delegated to the Cloudflare Artifacts binding.
+Gitflare does not store Git objects, refs, packfiles, or repository history itself.
 
-Do not add `git upload-pack` / `git receive-pack` until those primitives are proven.
-Do not add GitHub Actions or a large framework to fill this directory.
+## Authentication
+
+Every route except `/healthz` requires:
+
+```text
+Authorization: Bearer <GITFLARE_ADMIN_TOKEN>
+```
+
+Configure `GITFLARE_ADMIN_TOKEN` as a Worker secret before deploying.
+
+This is an intentionally narrow bootstrap boundary, not the final human/agent identity model.
+
+## Token policy
+
+The initial API defaults to:
+
+- `read` scope
+- 15-minute TTL
+- minimum 60 seconds
+- maximum 60 minutes
+
+Write tokens must be explicitly requested.
+
+## What comes next
+
+The next implementation slice is event-driven execution:
+
+```text
+Artifacts repo push
+      -> cf.artifacts.repo.pushed
+      -> Cloudflare Workflow
+      -> Sandbox / Container
+      -> status + evidence
+```
+
+Do not add a custom Git server, object database, ref coordinator, or GitHub Actions runner to this directory.
