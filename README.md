@@ -65,6 +65,31 @@ Gitflare should stay thin:
 
 It should **not** become another giant forge.
 
+## First executable slice
+
+The repository now contains a minimal Worker control API over an Artifacts namespace.
+
+```text
+GET  /healthz
+GET  /repos
+POST /repos
+POST /repos/:repo/tokens
+```
+
+All non-health routes require a `GITFLARE_ADMIN_TOKEN` Worker secret.
+The API defaults to short-lived read credentials and requires write scope to be requested explicitly.
+
+Bootstrap locally or in a Cloudflare-enabled development environment:
+
+```bash
+npm install
+npx wrangler secret put GITFLARE_ADMIN_TOKEN
+npm run check
+npm run dev
+```
+
+The Worker config binds `ARTIFACTS` to the `gitflare` namespace.
+
 ## Dogfood
 
 SCUMM3 is the first real dogfood workload. Its current migration mirrors Git history into a Cloudflare Artifacts repository and runs an isolated Cloudflare-native CI lane from Artifacts. GitHub remains the collaboration surface while the execution plane moves underneath it.
