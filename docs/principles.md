@@ -1,87 +1,117 @@
 # Principles
 
 Gitflare exists to keep Git boring and let Cloudflare do the work.
-These principles are the product contract. Features that violate them do not belong here.
 
-## 1. Git is the source of truth
+These principles are the product contract.
 
-Preserve normal Git semantics.
-Do not invent a replacement version-control model.
+## 1. Do not reimplement Artifacts
 
-Repositories, objects, refs, branches, and tags should mean what they mean in Git.
-A clone produced by Gitflare should be a Git repository, not a Gitflare repository.
+Cloudflare Artifacts is the Git repository primitive.
 
-## 2. Cloudflare does the work
+If Artifacts already owns a concern — Git history, refs, smart HTTP, repository durability, repo-scoped tokens, import/fork behavior — Gitflare does not create a shadow implementation of it.
 
-Prefer Cloudflare-native primitives for everything surrounding Git.
+Deletion of redundant infrastructure is architectural progress.
 
-| Concern | Home |
-| --- | --- |
-| HTTP/API edge | Workers |
-| metadata | D1 |
-| Git objects and artifacts | R2 |
-| serialized mutation | Durable Objects |
-| asynchronous events | Workflows |
-| git binaries, checkout, builds, tests | Containers |
+## 2. Normal Git wins
 
-Do not rebuild execution, identity, storage, or delivery as a sidecar forge when Cloudflare already provides the primitive.
+A Gitflare-backed repository is a Git repository.
 
-## 3. Small control plane
+Developers and agents should use ordinary Git clients and ordinary Git concepts: commits, refs, branches, tags, clone, fetch, pull, and push.
 
-The SCM layer should remain intentionally narrow.
+No proprietary source-control client is required.
 
-Gitflare owns repositories, refs, objects, statuses, review objects, and events.
-It does not own CI orchestration, issue trackers, boards, package registries, social feeds, wikis, or plugin marketplaces.
+## 3. Gitflare stays thin
 
-If a feature can live as a Cloudflare Workflow, Container job, or Worker reacting to an event, it should not be absorbed into the SCM server.
+Gitflare owns only the missing coordination around the repository:
 
-## 4. Open protocols first
+- policy
+- identity mapping
+- token issuance rules
+- mirrors/provider adapters
+- review/change objects
+- statuses
+- automation handoff
+- evidence/deployment links
 
-Normal Git tooling must work.
+It does not become a monolithic forge.
 
-A developer should eventually be able to run:
+## 4. Source is not execution
 
-```bash
-git clone https://git.example.com/org/repo.git
-git fetch
-git push
+A repository mutation emits work. It does not execute the work inside the source-control server.
+
+Use Cloudflare Workflows for orchestration and Sandbox/Containers for builds, tests, browser proof, and toolchains.
+
+Gitflare should never grow an internal Actions-style runner fleet.
+
+## 5. Humans and machines can use different surfaces
+
+Humans may prefer GitHub because that is where contributors, PRs, issues, and discovery already exist.
+
+Machines do not need GitHub to own execution.
+
+Gitflare explicitly supports this split:
+
+```text
+human collaboration surface
+          |
+          v
+     source provider
+          |
+          v
+Cloudflare Artifacts
+          |
+          v
+Cloudflare execution plane
 ```
 
-without a proprietary client.
+A GitHub mirror is therefore a compatibility/social feature, not the architectural center.
 
-HTTP(S) Git smart protocol is the intended access path.
-SSH, custom CLIs, and web UIs are not prerequisites for the control plane to be useful.
+## 6. Credentials are narrow and short-lived
 
-## 5. Immutable objects
+Prefer repository-scoped Artifacts tokens.
 
-Git objects and build artifacts should favor immutable storage models.
+Use read credentials for clone/fetch/pull and write credentials only where push is required.
 
-Content-addressed bytes go to R2.
-Once written, an object id refers to those bytes forever.
-Overwrite is a bug.
-Mutation belongs to refs, not objects.
+Production deployment credentials never belong in untrusted source execution.
 
-Do not store large Git object bodies in D1.
+## 7. Revisions are identified, not implied
 
-## 6. Explicit coordination
+Mirrors, builds, checks, evidence, and deployments should all name the exact commit they concern.
 
-Strong coordination should exist only where Git semantics require it, especially ref mutation.
+A mirror is not “successful” because a command returned zero; it is successful when the target ref resolves to the expected revision.
 
-One repository coordinator Durable Object per repository is the default place for:
+A deployment is not “the latest”; it is deployment of a specific validated revision.
 
-- ref update serialization
-- compare-and-swap
-- push arbitration
-- short-lived receive-pack state
-- status/review fan-out that must not race the ref
+## 8. Evidence is durable and separate
 
-Do not introduce global locks, cluster coordinators, or chatty consensus for reads of immutable data.
+Source history belongs in Artifacts.
 
-## 7. No CI inside Git
+Execution evidence belongs in an evidence store such as R2, with metadata indexed separately when useful.
 
-Push events should emit work.
-They should not turn the SCM server itself into a giant CI orchestrator.
+Do not pollute Git history with transient logs merely because Git is available.
 
-The push path authenticates, accepts objects, validates the graph it must validate, coordinates the ref update, records the event, and returns.
-Build, test, artifact storage, and deploy happen downstream on Cloudflare Workflows and Containers.
-Statuses come back as data, not as a second control plane living inside Git.
+## 9. Provider boundaries are explicit
+
+GitHub, GitLab, self-hosted Git, or another forge should connect through a narrow source/collaboration adapter.
+
+Changing the human-facing provider must not require rewriting the Cloudflare CI engine.
+
+## 10. Dogfood before abstraction
+
+SCUMM3 is the first proving ground.
+
+Patterns become Gitflare features only after they survive a real repository, real pushes, real CI, and real deployment boundaries.
+
+Do not generalize imaginary requirements.
+
+## 11. Beta means beta
+
+Cloudflare Artifacts is currently a closed beta.
+
+Gitflare should state that dependency plainly, keep boundaries reversible, and avoid pretending the platform contract is more stable than it is.
+
+## 12. Public by default
+
+Gitflare's architecture, experiments, failures, and reusable patterns should be developed in the open whenever they do not expose credentials or private project material.
+
+The value of the project is as much the pattern as the code.
