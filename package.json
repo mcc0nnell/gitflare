@@ -1,0 +1,16 @@
+{
+  "name": "gitflare",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --remote",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && wrangler deploy --dry-run",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "wrangler": "4.124.0"
+  }
+}
