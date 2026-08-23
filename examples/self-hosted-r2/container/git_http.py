@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -129,8 +130,8 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         print(f"{self.address_string()} - {format % args}", flush=True)
 
-    def send_json(self, status: int, body: str) -> None:
-        payload = body.encode("utf-8")
+    def send_json(self, status: int, body: object) -> None:
+        payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
         self.send_header("content-type", "application/json; charset=utf-8")
         self.send_header("content-length", str(len(payload)))
@@ -142,27 +143,18 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         if parsed.path == "/__gitflare/status":
             ensure_repo()
-            head = repo_head()
-            self.send_json(
-                200,
-                "{"
-                f'"ok":true,"bootId":"{BOOT_ID}",'
-                f'"head":{repr(head).replace(chr(39), chr(34)) if head else "null"}'
-                "}",
-            )
+            self.send_json(200, {"ok": True, "bootId": BOOT_ID, "head": repo_head()})
             return
-
         if parsed.path == "/__gitflare/export":
             self.handle_export()
             return
-
         self.handle_git()
 
     def do_POST(self) -> None:
         parsed = urlsplit(self.path)
         if parsed.path == "/__gitflare/reset":
             reset_repo()
-            self.send_json(200, "{\"ok\":true}")
+            self.send_json(200, {"ok": True})
             return
         self.handle_git()
 
@@ -176,7 +168,7 @@ class Handler(BaseHTTPRequestHandler):
     def handle_export(self) -> None:
         ok, details = fsck_repo()
         if not ok:
-            self.send_json(500, "{\"ok\":false,\"error\":\"git fsck failed\"}")
+            self.send_json(500, {"ok": False, "error": "git fsck failed"})
             print(details, flush=True)
             return
 
@@ -226,15 +218,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:
                 if not REPO_PATH.exists() and old_repo.exists():
                     old_repo.rename(REPO_PATH)
-                self.send_json(400, "{\"ok\":false,\"error\":\"invalid checkpoint\"}")
+                self.send_json(400, {"ok": False, "error": "invalid checkpoint"})
                 print(f"checkpoint import failed: {error}", flush=True)
                 return
             finally:
                 shutil.rmtree(import_root, ignore_errors=True)
 
-        head = repo_head()
-        head_json = f'"{head}"' if head else "null"
-        self.send_json(200, f'{{"ok":true,"head":{head_json}}}')
+        self.send_json(200, {"ok": True, "head": repo_head()})
 
     def handle_git(self) -> None:
         parsed = urlsplit(self.path)
@@ -260,7 +250,7 @@ class Handler(BaseHTTPRequestHandler):
                     "REQUEST_METHOD": self.command,
                     "REMOTE_USER": "gitflare",
                     "REMOTE_ADDR": self.client_address[0],
-                    "SERVER_PROTOCOL": self.protocol_version,
+                    "SERVER_PROTOCOL": self.request_version,
                     "SERVER_NAME": self.server.server_address[0],
                     "SERVER_PORT": str(self.server.server_address[1]),
                     "CONTENT_LENGTH": str(body_size),
@@ -283,7 +273,7 @@ class Handler(BaseHTTPRequestHandler):
             )
             _, stderr = process.communicate()
             if process.returncode != 0:
-                self.send_json(500, "{\"ok\":false,\"error\":\"git http-backend failed\"}")
+                self.send_json(500, {"ok": False, "error": "git http-backend failed"})
                 print(stderr.decode("utf-8", errors="replace"), flush=True)
                 return
 
