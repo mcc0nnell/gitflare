@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit",
     "build": "wrangler deploy --dry-run --containers-rollout=none",
     "check": "npm run typecheck && npm run build",
+    "proof:persistence": "bash scripts/persistence-proof.sh",
     "deploy": "wrangler deploy"
   },
   "dependencies": {
