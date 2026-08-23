@@ -1,0 +1,22 @@
+{
+  "name": "@gitflare/artifacts-push-workflow",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "wrangler deploy --dry-run --containers-rollout=none",
+    "dev": "wrangler dev",
+    "typecheck": "wrangler types --include-runtime false --strict-vars false --env-interface CloudflareBindings && tsc --noEmit",
+    "cf-typegen": "wrangler types --include-runtime false --strict-vars false --env-interface CloudflareBindings",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/ci": "0.1.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260818.1",
+    "@types/node": "24.12.0",
+    "typescript": "5.9.3",
+    "wrangler": "4.124.0"
+  }
+}
