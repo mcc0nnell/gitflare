@@ -39,7 +39,7 @@ function json(body: unknown, status = 200, headers?: HeadersInit): Response {
 }
 
 function validRepoPart(value: string): boolean {
-  return value.length > 0 && value !== '.' && value !== '..' && !value.includes('\\');
+  return value.length > 0 && value !== '.' && value !== '..' && !value.includes('/') && !value.includes('\\');
 }
 
 function parseRepoPath(pathname: string): { repoKey: string; suffix: string } | null {
@@ -221,9 +221,14 @@ export class RepoContainer extends Container<Env> {
     const exported = await this.containerFetch('http://localhost/__gitflare/export');
     if (!exported.ok || !exported.body) throw new Error(`checkpoint export failed: ${exported.status}`);
 
+    const length = Number(exported.headers.get('content-length'));
+    if (!Number.isSafeInteger(length) || length < 0) throw new Error('checkpoint export did not provide a valid content length');
+
     const head = exported.headers.get('x-gitflare-head');
     const key = `repos/${encodeURIComponent(repoKey)}/generations/${generation}.tar.gz`;
-    const stored = await this.env.REPO_BACKUPS.put(key, exported.body, {
+    const fixed = new FixedLengthStream(length);
+    const pipePromise = exported.body.pipeTo(fixed.writable);
+    const putPromise = this.env.REPO_BACKUPS.put(key, fixed.readable, {
       httpMetadata: { contentType: 'application/gzip' },
       customMetadata: {
         repo: repoKey,
@@ -231,8 +236,10 @@ export class RepoContainer extends Container<Env> {
         head: head ?? '',
       },
     });
+    const [stored] = await Promise.all([putPromise, pipePromise.then(() => undefined)]);
+    if (!stored) throw new Error('R2 rejected checkpoint upload');
 
-    return { key, etag: stored?.etag ?? null, head };
+    return { key, etag: stored.etag, head };
   }
 
   private markMutating(): void {
@@ -323,7 +330,11 @@ export class RepoContainer extends Container<Env> {
   }
 }
 
-async function handleAdmin(request: Request, env: Env, admin: NonNullable<ReturnType<typeof parseAdminPath>>): Promise<Response> {
+async function handleAdmin(
+  request: Request,
+  env: Env,
+  admin: NonNullable<ReturnType<typeof parseAdminPath>>,
+): Promise<Response> {
   if (!adminAuthorized(request, env)) return unauthorized();
   const repo = getContainer(env.REPO_CONTAINER, admin.repoKey);
 
