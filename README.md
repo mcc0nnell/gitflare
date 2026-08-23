@@ -67,7 +67,7 @@ It should **not** become another giant forge.
 
 ## First executable slice
 
-The repository now contains a minimal Worker control API over an Artifacts namespace.
+The repository contains a minimal Worker control API over an Artifacts namespace.
 
 ```text
 GET  /healthz
@@ -89,6 +89,22 @@ npm run dev
 ```
 
 The Worker config binds `ARTIFACTS` to the `gitflare` namespace.
+
+## Push-to-execution example
+
+[`examples/artifacts-push-workflow`](examples/artifacts-push-workflow/) shows the next seam:
+
+```text
+git push
+   -> Cloudflare Artifacts
+   -> cf.artifacts.repo.pushed
+   -> Cloudflare Workflow
+   -> @cloudflare/ci
+   -> isolated Sandbox checkout
+   -> revision + Git connectivity proof
+```
+
+The trigger covers the whole `gitflare` namespace. It deliberately performs no application-specific build or deployment; consumers layer their own CI profile after the source handoff is proven.
 
 ## Dogfood
 
@@ -117,6 +133,7 @@ Gitflare is not an official Cloudflare project and is not affiliated with or end
 - [Principles](docs/principles.md)
 - [Architecture](docs/architecture.md)
 - [MVP](docs/mvp.md)
+- [SCUMM3 dogfood](docs/scumm3-dogfood.md)
 
 ## License
 
