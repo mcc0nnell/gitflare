@@ -1,3 +1,5 @@
+import { gitflareConsoleHtml } from './ui.js';
+
 type TokenScope = 'read' | 'write';
 
 interface ArtifactRepoSummary {
@@ -62,6 +64,20 @@ function json(body: unknown, status = 200): Response {
     headers: {
       'content-type': 'application/json; charset=utf-8',
       'cache-control': 'no-store',
+    },
+  });
+}
+
+function html(body: string): Response {
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+      'content-security-policy': "default-src 'none'; connect-src 'self'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+      'referrer-policy': 'no-referrer',
+      'x-content-type-options': 'nosniff',
+      'x-frame-options': 'DENY',
     },
   });
 }
@@ -157,12 +173,17 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/console')) {
+      return html(gitflareConsoleHtml());
+    }
+
     if (request.method === 'GET' && url.pathname === '/healthz') {
       return json({
         ok: true,
         service: 'gitflare-api',
         sourcePlane: 'cloudflare-artifacts',
         namespace: 'gitflare',
+        console: '/console',
       });
     }
 
