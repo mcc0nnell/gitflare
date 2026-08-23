@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "gitflare-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-23",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+  "artifacts": [
+    {
+      "binding": "ARTIFACTS",
+      "namespace": "gitflare"
+    }
+  ]
+}
