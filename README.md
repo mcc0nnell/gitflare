@@ -106,6 +106,30 @@ git push
 
 The trigger covers the whole `gitflare` namespace. It deliberately performs no application-specific build or deployment; consumers layer their own CI profile after the source handoff is proven.
 
+## Agent control plane
+
+CI is not an MCP server internally. Gitflare exposes a thin authenticated MCP adapter over the same Cloudflare Workflow control plane used by push-triggered CI.
+
+```text
+Atlas / Shell / TalkPipe / agents
+              |
+              | MCP
+              v
+      Gitflare CI adapter
+              |
+              v
+       CI_WORKFLOW binding
+              |
+              v
+       @cloudflare/ci
+```
+
+The first MCP surface supports starting, inspecting, retrying, and cancelling known CI runs. MCP-triggered and push-triggered executions use the same source-derived Workflow identity, so an agent does not create a second CI universe beside normal Git events.
+
+[`talkpipe/`](talkpipe/) contains the reference TalkPipe/ChatterLang operator path. MCP remains an adapter: Git pushes and Cloudflare events continue to run CI when no agent is connected.
+
+See [CI MCP architecture](docs/ci-mcp.md) for the contract and security boundary.
+
 ## Dogfood
 
 SCUMM3 is the first real dogfood workload. Its current migration mirrors Git history into a Cloudflare Artifacts repository and runs an isolated Cloudflare-native CI lane from Artifacts. GitHub remains the collaboration surface while the execution plane moves underneath it.
@@ -133,6 +157,7 @@ Gitflare is not an official Cloudflare project and is not affiliated with or end
 - [Principles](docs/principles.md)
 - [Architecture](docs/architecture.md)
 - [MVP](docs/mvp.md)
+- [CI MCP architecture](docs/ci-mcp.md)
 - [SCUMM3 dogfood](docs/scumm3-dogfood.md)
 
 ## License
