@@ -1,5 +1,10 @@
 import type { CiParams, CloudflareArtifacts } from '@cloudflare/ci';
-import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
+import {
+  createMcpHandler,
+  hostHeaderValidationResponse,
+  McpServer,
+  originValidationResponse,
+} from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Bindings } from '../env';
 
@@ -224,6 +229,11 @@ function createCiMcpServer(env: Bindings) {
 }
 
 export async function handleCiMcpRequest(request: Request, env: Bindings): Promise<Response> {
+  const rejected =
+    hostHeaderValidationResponse(request, [env.GITFLARE_CI_MCP_HOST]) ??
+    originValidationResponse(request, []);
+  if (rejected) return rejected;
+
   if (!(await authorized(request, env))) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
