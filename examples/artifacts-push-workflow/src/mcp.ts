@@ -32,13 +32,18 @@ function failure(error: unknown) {
   };
 }
 
-function authorized(request: Request, env: Bindings): boolean {
+async function authorized(request: Request, env: Bindings): Promise<boolean> {
   const token = env.GITFLARE_CI_MCP_TOKEN;
-  return (
-    typeof token === 'string' &&
-    token.length > 0 &&
-    request.headers.get('authorization') === `Bearer ${token}`
-  );
+  if (typeof token !== 'string' || token.length === 0) return false;
+
+  const encoder = new TextEncoder();
+  const provided = request.headers.get('authorization') ?? '';
+  const expected = `Bearer ${token}`;
+  const [providedHash, expectedHash] = await Promise.all([
+    crypto.subtle.digest('SHA-256', encoder.encode(provided)),
+    crypto.subtle.digest('SHA-256', encoder.encode(expected)),
+  ]);
+  return crypto.subtle.timingSafeEqual(providedHash, expectedHash);
 }
 
 function ciParams(input: {
@@ -68,8 +73,9 @@ function ciParams(input: {
   };
 }
 
-// Keep MCP-started runs interoperable with @cloudflare/ci's push-triggered
-// runs by using the same source-derived Workflow ID contract.
+// Compatibility contract with @cloudflare/ci 0.1.0's internal source-derived
+// Workflow ID. Keep this local only until the upstream package exports a public
+// helper; MCP-started and push-triggered runs must resolve to the same instance.
 async function runId(source: { provider: string; owner: string; repo: string; sha: string }) {
   const digest = await crypto.subtle.digest(
     'SHA-256',
@@ -218,7 +224,7 @@ function createCiMcpServer(env: Bindings) {
 }
 
 export async function handleCiMcpRequest(request: Request, env: Bindings): Promise<Response> {
-  if (!authorized(request, env)) {
+  if (!(await authorized(request, env))) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
