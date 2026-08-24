@@ -40,6 +40,7 @@ The purpose of this example is to prove the provider-neutral handoff from source
 - an R2 bucket named `gitflare-ci-backups`
 - an authenticated Wrangler environment
 - the Cloudflare account ID filled into `wrangler.jsonc`
+- the MCP Worker hostname filled into `wrangler.jsonc`
 - the secrets required by `@cloudflare/ci` / Sandbox snapshot handling
 - a `GITFLARE_CI_MCP_TOKEN` Worker secret for MCP access
 
@@ -47,13 +48,14 @@ Use the current `@cloudflare/ci` documentation as the source of truth for its re
 
 ## Configure
 
-Replace:
+Replace both placeholders in `wrangler.jsonc`:
 
 ```text
 replace-with-your-cloudflare-account-id
+replace-with-your-ci-worker-host
 ```
 
-in `wrangler.jsonc` with the account that owns the Artifacts namespace and CI Worker.
+`GITFLARE_CI_MCP_HOST` is a hostname only, without a scheme or path, for example `gitflare-artifacts-ci.example.workers.dev` or the hostname of a configured custom domain.
 
 Set the MCP bearer secret:
 
@@ -79,6 +81,8 @@ npm run deploy
 ## MCP tools
 
 `POST /mcp` is served by the official `@modelcontextprotocol/server` package and supports the current stateless MCP transport as well as the SDK's legacy compatibility path.
+
+Before MCP dispatch, the Worker validates `Host` against `GITFLARE_CI_MCP_HOST`, rejects requests carrying a browser `Origin` header, and verifies the bearer token with a constant-time comparison. The first slice is intentionally an agent/CLI surface; browser clients can gain an explicit trusted-origin allowlist later.
 
 The first tool surface is deliberately small:
 
