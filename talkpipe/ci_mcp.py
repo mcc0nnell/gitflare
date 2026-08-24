@@ -8,6 +8,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+import urllib.response
 from collections.abc import Iterable, Iterator
 from typing import Any
 
@@ -36,7 +37,7 @@ def _parse_response(response: urllib.response.addinfourl) -> dict[str, Any]:
     return json.loads(body)
 
 
-@registry.register_segment("gitflareMcpCall")
+@registry.register_segment(name="gitflareMcpCall")
 @core.segment()
 def gitflare_mcp_call(items: Iterable[Any], tool: str) -> Iterator[dict[str, Any]]:
     """Call one Gitflare CI MCP tool for each input item."""
