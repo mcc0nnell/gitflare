@@ -76,6 +76,8 @@ The `/mcp` route is protected by a dedicated Worker secret, `GITFLARE_CI_MCP_TOK
 
 The token is separate from repository credentials and Cloudflare deployment credentials. MCP clients never receive Artifacts checkout tokens, Sandbox credentials, R2 credentials or Cloudflare API credentials through this interface.
 
+Before authentication, the Worker also validates the request `Host` against `GITFLARE_CI_MCP_HOST`. The initial surface is deliberately non-browser: any request carrying an `Origin` header is rejected. This follows the MCP SDK requirement that bare fetch runtimes put Host/Origin validation in front of `createMcpHandler` instead of assuming the handler performs those checks.
+
 Tool authority is also intentionally smaller than arbitrary Workflow or shell execution:
 
 - an agent cannot supply a shell command;
@@ -84,13 +86,13 @@ Tool authority is also intentionally smaller than arbitrary Workflow or shell ex
 - an agent cannot create an alternative pipeline definition;
 - cancellation is explicitly marked destructive in MCP tool annotations.
 
-The current endpoint does not enable browser CORS. Interactive browser clients should use an explicit trusted-origin policy rather than reflecting arbitrary origins.
+Interactive browser clients can be added later with an explicit trusted-origin allowlist instead of reflected or wildcard CORS.
 
 ## TalkPipe role
 
 TalkPipe is the reference orchestration spine, not a replacement MCP implementation.
 
-`talkpipe/ci_mcp.py` registers a `gitflareMcpCall` ChatterLang segment. A TalkPipe pipeline supplies typed JSON arguments to the segment, the segment performs one MCP exchange, and the MCP server translates the operation into the Cloudflare Workflow binding.
+`talkpipe/ci_mcp.py` registers a `gitflareMcpCall` ChatterLang segment. A TalkPipe pipeline supplies JSON arguments to the segment, the segment performs one MCP exchange, and the MCP server translates the operation into the Cloudflare Workflow binding.
 
 ```text
 ChatterLang
