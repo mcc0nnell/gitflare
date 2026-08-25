@@ -3,10 +3,13 @@ import test from 'node:test';
 import {
   assuranceWorkspaceId,
   dispatchNativeJob,
+  extractNativeEvidence,
   nativeDispatchJobs,
   readNativeJobLog,
   readNativeJobStatus,
   type AssuranceSourceIdentity,
+  type DispatchedNativeJob,
+  type NativeDispatchJob,
   type ShellService,
 } from './assurance-dispatch';
 import {
@@ -86,6 +89,41 @@ function planText(): string {
   });
 }
 
+function evidencePayload(job: NativeDispatchJob): Record<string, unknown> {
+  if (job.jobId.startsWith('m2image-source:')) {
+    const [, alias] = job.jobId.split(':');
+    return {
+      schemaVersion: 1,
+      profile: 'firecrab-release-assurance-v1',
+      stage: 'm2image-source-assurance',
+      subject: { sha: SHA, alias, architecture: job.architecture },
+      verdict: 'PASS',
+      reason: 'ok',
+    };
+  }
+  const target = job.jobId.slice('host-release:'.length);
+  return {
+    schemaVersion: 1,
+    profile: 'firecrab-release-assurance-v1',
+    stage: 'host-release-assurance',
+    subject: { sha: SHA, target, architecture: job.architecture },
+    verdict: 'PASS',
+    reason: 'ok',
+  };
+}
+
+function dispatched(job: NativeDispatchJob): DispatchedNativeJob {
+  return {
+    jobId: job.jobId,
+    requestId: '123e4567-e89b-42d3-a456-426614174001',
+    architecture: job.architecture,
+    buildId: '123e4567-e89b-42d3-a456-426614174000',
+    workspaceId: assuranceWorkspaceId('firecrab', SHA),
+    evidence: job.evidence,
+    source: job.source,
+  };
+}
+
 test('dispatcher expands only ten externally admitted native cells', async () => {
   const admission = await admitFireCrabAssurancePlan(planText(), SHA);
   const jobs = nativeDispatchJobs(admission, SOURCE);
@@ -129,7 +167,7 @@ test('dispatcher refuses a plan/source object mismatch', async () => {
   );
 });
 
-test('private Shell dispatch carries semantic requirements and deterministic request identity', async () => {
+test('private Shell dispatch carries semantic requirements, evidence path, and deterministic request identity', async () => {
   const admission = await admitFireCrabAssurancePlan(planText(), SHA);
   const job = nativeDispatchJobs(admission, SOURCE)[0];
   const seen: Request[] = [];
@@ -150,6 +188,7 @@ test('private Shell dispatch carries semantic requirements and deterministic req
       const body = await request.json() as Record<string, unknown>;
       observedRequestId = String(body.requestId);
       assert.match(observedRequestId, /^[0-9a-f-]{36}$/);
+      assert.equal(body.evidencePath, job.evidence);
       const source = body.source as Record<string, unknown>;
       assert.equal(source.sha, SHA);
       assert.equal('token' in source, false);
@@ -159,6 +198,7 @@ test('private Shell dispatch carries semantic requirements and deterministic req
         requestId: observedRequestId,
         buildId,
         architecture: job.architecture,
+        evidencePath: job.evidence,
         source: job.source,
       }, { status: 201 });
     },
@@ -175,35 +215,75 @@ test('private Shell dispatch carries semantic requirements and deterministic req
   assert.equal(seen[1].headers.get('x-scumm-shell-admission'), 'approved');
 });
 
+test('evidence parser binds result JSON to job, source SHA, and architecture', async () => {
+  const admission = await admitFireCrabAssurancePlan(planText(), SHA);
+  const job = nativeDispatchJobs(admission, SOURCE)[0];
+  const active = dispatched(job);
+  const payload = evidencePayload(job);
+  const log = {
+    consoleTruncated: false,
+    console: [
+      'command output',
+      `SCUMM_ASSURANCE_EVIDENCE_BEGIN ${job.evidence}`,
+      JSON.stringify(payload, null, 2),
+      `SCUMM_ASSURANCE_EVIDENCE_END ${job.evidence}`,
+    ].join('\n'),
+  };
+  assert.deepEqual(extractNativeEvidence(active, log), payload);
+
+  const wrong = structuredClone(payload);
+  (wrong.subject as Record<string, unknown>).sha = 'b'.repeat(40);
+  assert.throws(() => extractNativeEvidence(active, {
+    consoleTruncated: false,
+    console: [
+      `SCUMM_ASSURANCE_EVIDENCE_BEGIN ${job.evidence}`,
+      JSON.stringify(wrong),
+      `SCUMM_ASSURANCE_EVIDENCE_END ${job.evidence}`,
+    ].join('\n'),
+  }), /changed source SHA\/architecture/);
+
+  assert.throws(() => extractNativeEvidence(active, {
+    consoleTruncated: false,
+    console: `SCUMM_ASSURANCE_EVIDENCE_MISSING ${job.evidence}`,
+  }), /evidence is missing/);
+});
+
 test('status and log reads stay bound to the architecture selected at trigger', async () => {
   const admission = await admitFireCrabAssurancePlan(planText(), SHA);
   const job = nativeDispatchJobs(admission, SOURCE).find((item) => item.architecture === 'aarch64')!;
-  const buildId = '123e4567-e89b-42d3-a456-426614174000';
+  const active = dispatched(job);
   const paths: string[] = [];
   const shell: ShellService = {
     async fetch(input) {
       const request = input instanceof Request ? input : new Request(input);
-      paths.push(new URL(request.url).pathname);
+      const path = new URL(request.url).pathname;
+      paths.push(path);
+      if (path.endsWith('/log')) {
+        return Response.json({
+          architecture: 'aarch64',
+          buildId: active.buildId,
+          complete: true,
+          exitCode: 0,
+          consoleTruncated: false,
+          console: [
+            `SCUMM_ASSURANCE_EVIDENCE_BEGIN ${job.evidence}`,
+            JSON.stringify(evidencePayload(job)),
+            `SCUMM_ASSURANCE_EVIDENCE_END ${job.evidence}`,
+          ].join('\n'),
+        });
+      }
       return Response.json({
         architecture: 'aarch64',
-        buildId,
+        buildId: active.buildId,
         complete: true,
         conclusion: 'success',
         exitCode: 0,
       });
     },
   };
-  const dispatched = {
-    jobId: job.jobId,
-    requestId: '123e4567-e89b-42d3-a456-426614174001',
-    architecture: job.architecture,
-    buildId,
-    workspaceId: assuranceWorkspaceId('firecrab', SHA),
-    evidence: job.evidence,
-    source: job.source,
-  };
-  await readNativeJobStatus(shell, dispatched);
-  await readNativeJobLog(shell, dispatched);
-  assert.ok(paths[0].includes(`/assurance-builds/aarch64/${buildId}`));
-  assert.ok(paths[1].endsWith(`/assurance-builds/aarch64/${buildId}/log`));
+  await readNativeJobStatus(shell, active);
+  const log = await readNativeJobLog(shell, active);
+  assert.equal((log.assuranceEvidence as Record<string, unknown>).verdict, 'PASS');
+  assert.ok(paths[0].includes(`/assurance-builds/aarch64/${active.buildId}`));
+  assert.ok(paths[1].endsWith(`/assurance-builds/aarch64/${active.buildId}/log`));
 });
