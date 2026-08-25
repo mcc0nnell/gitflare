@@ -28,6 +28,19 @@ python talkpipe/ci_mcp.py ci_run_start \
 
 The start operation is source-idempotent. A push-triggered run and an MCP-triggered run for the same Artifacts repository and commit resolve to the same Cloudflare Workflow instance ID.
 
+## FireCrab release-compliance preflight
+
+When the Artifacts repository is named `firecrab`, Gitflare selects the `release-compliance-preflight` profile after the normal `verify-source` boundary. The profile itself is versioned in FireCrab as `scripts/gitflare-release-compliance.sh`; Gitflare does not carry FireCrab's compliance policy.
+
+```bash
+python talkpipe/ci_mcp.py ci_run_start \
+  '{"repo":"firecrab","sha":"<exact-firecrab-sha>","ref":"refs/heads/<branch>"}'
+```
+
+The preflight deliberately has no cross-run CI cache. It verifies the exact checked-out object ID, refuses a dirty checkout, runs the Python compliance tests with `PYTHONOPTIMIZE=1`, runs the M2Image and host-package contracts, rebuilds Cargo/npm dependency state in per-run scratch directories, regenerates the release license inventory with `--deny-incompatible`, and emits a hash-bound receipt bundle at `dist/gitflare-receipts.tar.gz` in the successful runner snapshot.
+
+The successful profile discards its Cargo/npm scratch state before the final snapshot. The retained snapshot is evidence, not a dependency cache.
+
 ## Inspect, retry, or cancel
 
 ```bash
