@@ -36,14 +36,16 @@ Do not collapse these steps. Each one is an independent gate.
 1. Confirm the Cloudflare account has Artifacts access.
 2. Use `wrangler.artifacts.jsonc`, which binds namespace `gitflare` and sets
    `GITFLARE_SOURCE_PLANE_MODE=cloudflare-artifacts`.
-3. Configure `GITFLARE_ARTIFACTS_REMOTE_BASE` to the exact account/namespace
-   remote base. Until this is present, `/v1/source-plane` remains unavailable
-   with `cloudflare-artifacts-remote-unconfigured`.
-4. Create or import the canonical `firecrab` repository in the `gitflare`
+3. Create or import the canonical `firecrab` repository in the `gitflare`
    namespace.
-5. Verify the admitted immutable FireCrab commit is readable from that repo.
-6. Only then can Gitflare mint a short-lived read source ticket.
-7. WindAnvil may pass that credential to SCUMM for native execution. The token
+4. Capture the **exact** `remote` returned by Cloudflare Artifacts for that
+   repository. Do not synthesize a URL from an assumed account/namespace layout.
+5. Configure that exact value as `GITFLARE_FIRECRAB_REMOTE`. Until it is present,
+   `/v1/source-plane` remains unavailable with
+   `cloudflare-artifacts-remote-unconfigured`.
+6. Verify the admitted immutable FireCrab commit is readable from that repo.
+7. Only then can Gitflare mint a short-lived read source ticket.
+8. WindAnvil may pass that credential to SCUMM for native execution. The token
    dies at the transport boundary and is never retained in the WindAnvil
    receipt.
 
@@ -53,6 +55,10 @@ The activation command is deliberately separate from the normal deploy:
 npm run check:artifacts
 npm run deploy:artifacts
 ```
+
+`GITFLARE_FIRECRAB_REMOTE` is not a credential, but it is account-specific
+configuration. It can be supplied through deployment configuration rather than
+committed to the repository.
 
 The normal commands remain pre-entitlement safe:
 
@@ -67,7 +73,9 @@ npm run deploy
 
 - mode is `cloudflare-artifacts`
 - the Worker has an Artifacts binding
-- the exact canonical remote base is configured
+- the exact canonical `gitflare/firecrab` remote is configured
+- the remote is HTTPS on `artifacts.cloudflare.net` or an Artifacts subdomain
+- the remote path identifies namespace `gitflare` and repository `firecrab.git`
 - reason is `null`
 
 That endpoint establishes capability only. A specific assurance source ticket
