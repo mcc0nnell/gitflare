@@ -21,7 +21,9 @@ export class CI extends CIWorkflow<CloudflareArtifacts, Bindings> {
     // emitted by Cloudflare Artifacts is the revision being executed.
     const source = await ci.runner({
       name: 'verify-source',
-      command: `test "$(git rev-parse HEAD)" = "${sha}" && git fsck --no-reflogs --connectivity-only`,
+      command:
+        'test "$(git rev-parse HEAD)" = "$GITFLARE_EXPECTED_SHA" && git fsck --no-reflogs --connectivity-only',
+      env: { GITFLARE_EXPECTED_SHA: sha },
     });
 
     // Project policy lives with the project. Gitflare only chooses the profile;
@@ -31,7 +33,8 @@ export class CI extends CIWorkflow<CloudflareArtifacts, Bindings> {
     if (repo === 'firecrab') {
       await source.runner({
         name: 'release-compliance-preflight',
-        command: `GITFLARE_EXPECTED_SHA=${sha} bash scripts/gitflare-release-compliance.sh`,
+        command: 'bash scripts/gitflare-release-compliance.sh',
+        env: { GITFLARE_EXPECTED_SHA: sha },
       });
     }
   }
