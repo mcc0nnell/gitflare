@@ -8,7 +8,7 @@ import assuranceHandler, {
 } from '../src/assurance-entry';
 
 const SHA = '66ff69111fa562b17d4f0739e1c962539b6ea6b3';
-const REMOTE_BASE = 'https://0123456789abcdef0123456789abcdef.artifacts.cloudflare.net/git/gitflare';
+const REMOTE = 'https://artifacts.cloudflare.net/gitflare/firecrab.git';
 
 function request(body: Record<string, unknown>, auth = 'admin-secret'): Request {
   return new Request('https://gitflare.example/repos/firecrab/assurance/source-ticket', {
@@ -21,11 +21,11 @@ function request(body: Record<string, unknown>, auth = 'admin-secret'): Request 
   });
 }
 
-function env(options: { commitPresent?: boolean; remoteBase?: string } = {}): AssuranceEnv {
+function env(options: { commitPresent?: boolean; remote?: string } = {}): AssuranceEnv {
   return {
     GITFLARE_ADMIN_TOKEN: 'admin-secret',
     GITFLARE_SOURCE_PLANE_MODE: 'cloudflare-artifacts',
-    GITFLARE_ARTIFACTS_REMOTE_BASE: options.remoteBase ?? REMOTE_BASE,
+    GITFLARE_FIRECRAB_REMOTE: options.remote ?? REMOTE,
     ARTIFACTS: {
       async get(name: string) {
         assert.equal(name, 'firecrab');
@@ -104,7 +104,7 @@ test('enabled mode still blocks when the Artifacts binding is absent', async () 
     {
       GITFLARE_ADMIN_TOKEN: 'admin-secret',
       GITFLARE_SOURCE_PLANE_MODE: 'cloudflare-artifacts',
-      GITFLARE_ARTIFACTS_REMOTE_BASE: REMOTE_BASE,
+      GITFLARE_FIRECRAB_REMOTE: REMOTE,
     },
     'firecrab',
   );
@@ -122,9 +122,19 @@ test('source ticket proves canonical commit before minting a read credential', a
   assert.equal(body.namespace, 'gitflare');
   assert.equal(body.repo, 'firecrab');
   assert.equal(body.sha, SHA);
-  assert.equal(body.remote, `${REMOTE_BASE}/firecrab.git`);
+  assert.equal(body.remote, REMOTE);
   assert.equal(body.credential.kind, 'artifacts-repo-read-token');
   assert.equal(body.credential.ttl, 300);
+});
+
+test('source ticket accepts the exact repo remote rather than guessing one URL layout', async () => {
+  const accountScoped = 'https://0123456789abcdef0123456789abcdef.artifacts.cloudflare.net/git/gitflare/firecrab.git';
+  const status = sourcePlaneStatus(env({ remote: accountScoped }));
+  assert.equal(status.available, true);
+  const response = await handleAssuranceSourceTicket(request({ sha: SHA }), env({ remote: accountScoped }), 'firecrab');
+  assert.equal(response.status, 201);
+  const body = await response.json() as Record<string, any>;
+  assert.equal(body.remote, accountScoped);
 });
 
 test('source ticket refuses a SHA absent from canonical Artifacts', async () => {
@@ -134,10 +144,10 @@ test('source ticket refuses a SHA absent from canonical Artifacts', async () => 
   assert.equal(body.code, 'SOURCE_OBJECT_NOT_FOUND');
 });
 
-test('source ticket fails closed when the canonical Artifacts remote is not configured', async () => {
+test('source ticket fails closed when the exact FireCrab Artifacts remote is not configured', async () => {
   const response = await handleAssuranceSourceTicket(
     request({ sha: SHA }),
-    env({ remoteBase: 'https://github.com/mcc0nnell' }),
+    env({ remote: 'https://github.com/mcc0nnell/firecrab.git' }),
     'firecrab',
   );
   assert.equal(response.status, 503);
