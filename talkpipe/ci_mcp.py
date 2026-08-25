@@ -16,7 +16,13 @@ from talkpipe.chatterlang import compiler, registry
 from talkpipe.pipe import core
 
 MCP_VERSION = "2026-07-28"
-TOOLS = ("ci_run_start", "ci_run_status", "ci_run_retry", "ci_run_cancel")
+TOOLS = (
+    "ci_run_start",
+    "ci_run_status",
+    "ci_assurance_plan",
+    "ci_run_retry",
+    "ci_run_cancel",
+)
 
 
 def _required_env(name: str) -> str:
