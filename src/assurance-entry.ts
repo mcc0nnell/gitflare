@@ -27,12 +27,10 @@ export interface AssuranceEnv {
    */
   GITFLARE_SOURCE_PLANE_MODE?: SourcePlaneMode;
   /**
-   * Example: https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/gitflare
-   *
-   * This is configuration, not a credential. Gitflare returns a short-lived
-   * repo-scoped read token separately and never proxies Git object bytes.
+   * The exact `remote` returned by Cloudflare Artifacts for gitflare/firecrab.
+   * This is configuration, not a Git credential.
    */
-  GITFLARE_ARTIFACTS_REMOTE_BASE?: string;
+  GITFLARE_FIRECRAB_REMOTE?: string;
 }
 
 interface SourceTicketBody {
@@ -57,7 +55,6 @@ export interface SourcePlaneStatus {
 
 const SHA1 = /^[0-9a-f]{40}$/i;
 const REPO = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const REMOTE_BASE = /^https:\/\/[A-Za-z0-9.-]+\.artifacts\.cloudflare\.net\/git\/gitflare$/;
 const MAX_TTL_SECONDS = 900;
 
 function json(body: unknown, status = 200): Response {
@@ -81,11 +78,25 @@ function sourcePlaneMode(env: AssuranceEnv): SourcePlaneMode {
     : 'unavailable';
 }
 
+function canonicalFireCrabRemote(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return null;
+    const host = url.hostname.toLowerCase();
+    if (host !== 'artifacts.cloudflare.net' && !host.endsWith('.artifacts.cloudflare.net')) return null;
+    const segments = url.pathname.split('/').filter(Boolean).map((segment) => decodeURIComponent(segment));
+    if (segments.at(-1) !== 'firecrab.git' || !segments.includes('gitflare')) return null;
+    return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+  } catch {
+    return null;
+  }
+}
+
 export function sourcePlaneStatus(env: AssuranceEnv): SourcePlaneStatus {
   const mode = sourcePlaneMode(env);
   const bindingPresent = Boolean(env.ARTIFACTS);
-  const remoteBase = env.GITFLARE_ARTIFACTS_REMOTE_BASE?.replace(/\/+$/, '') ?? '';
-  const remoteConfigured = REMOTE_BASE.test(remoteBase);
+  const remoteConfigured = canonicalFireCrabRemote(env.GITFLARE_FIRECRAB_REMOTE) !== null;
 
   let reason: SourcePlaneStatus['reason'] = null;
   if (mode !== 'cloudflare-artifacts') {
@@ -133,12 +144,10 @@ function ttlSeconds(value: unknown): number {
   return ttl;
 }
 
-function configuredRemoteBase(env: AssuranceEnv): string {
-  const base = env.GITFLARE_ARTIFACTS_REMOTE_BASE?.replace(/\/+$/, '') ?? '';
-  if (!REMOTE_BASE.test(base)) {
-    throw new Error('Gitflare Artifacts remote base is not configured');
-  }
-  return base;
+function configuredFireCrabRemote(env: AssuranceEnv): string {
+  const remote = canonicalFireCrabRemote(env.GITFLARE_FIRECRAB_REMOTE);
+  if (!remote) throw new Error('Gitflare FireCrab Artifacts remote is not configured');
+  return remote;
 }
 
 export async function handleAssuranceSourceTicket(
@@ -168,10 +177,10 @@ export async function handleAssuranceSourceTicket(
   }
   const sha = body.sha.toLowerCase();
   let ttl: number;
-  let remoteBase: string;
+  let remote: string;
   try {
     ttl = ttlSeconds(body.ttl);
-    remoteBase = configuredRemoteBase(env);
+    remote = configuredFireCrabRemote(env);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return json({ error: message, code: 'INVALID_ARGUMENT' }, 400);
@@ -208,7 +217,7 @@ export async function handleAssuranceSourceTicket(
     namespace: 'gitflare',
     repo: repoName,
     sha,
-    remote: `${remoteBase}/${encodeURIComponent(repoName)}.git`,
+    remote,
     credential: {
       kind: 'artifacts-repo-read-token',
       token: credential.plaintext,
