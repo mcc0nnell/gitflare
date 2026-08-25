@@ -13,6 +13,8 @@ const NAMESPACE = 'gitflare';
 const PROVIDER = 'cloudflare-artifacts';
 const MAX_ASSURANCE_PLAN_BYTES = 256 * 1024;
 const MAX_ASSURANCE_ADMISSION_BYTES = 64 * 1024;
+const MAX_ASSURANCE_RECEIPT_BYTES = 512 * 1024;
+const EXPECTED_ASSURANCE_COMPONENTS = 11;
 
 const shaSchema = z
   .string()
@@ -44,11 +46,28 @@ function failure(error: unknown) {
   };
 }
 
-function assuranceAdmissionKey(repo: string, sha: string) {
+function canonicalRepo(repo: string): string {
   if (!/^[A-Za-z0-9._-]{1,96}$/.test(repo)) {
     throw new Error(`invalid assurance repository name: ${repo}`);
   }
-  return `assurance-admissions/${repo.toLowerCase()}/${sha.toLowerCase()}.json`;
+  return repo.toLowerCase();
+}
+
+function canonicalSha(sha: string): string {
+  if (!/^[a-f0-9]{40}([a-f0-9]{24})?$/i.test(sha)) {
+    throw new Error('invalid assurance Git object id');
+  }
+  return sha.toLowerCase();
+}
+
+function assuranceAdmissionKey(repo: string, sha: string) {
+  return `assurance-admissions/${canonicalRepo(repo)}/${canonicalSha(sha)}.json`;
+}
+
+function assuranceReceiptKey(kind: 'native' | 'final', repo: string, sha: string, planDigest: string) {
+  const digest = planDigest.replace(/^sha256:/, '');
+  if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error('invalid assurance plan digest');
+  return `assurance-${kind}/${canonicalRepo(repo)}/${canonicalSha(sha)}/${digest}.json`;
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -56,6 +75,24 @@ function record(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`${label} is not a JSON object`);
   }
   return value as Record<string, unknown>;
+}
+
+async function readBoundedObject(
+  env: Bindings,
+  key: string,
+  maxBytes: number,
+  label: string,
+): Promise<Record<string, unknown> | null> {
+  const object = await env.BACKUP_BUCKET.get(key);
+  if (object === null) return null;
+  if (object.size > maxBytes) throw new Error(`${label} exceeds maximum size`);
+  let value: unknown;
+  try {
+    value = JSON.parse(await object.text());
+  } catch {
+    throw new Error(`${label} is invalid JSON`);
+  }
+  return record(value, label);
 }
 
 async function authorized(request: Request, env: Bindings): Promise<boolean> {
@@ -125,7 +162,9 @@ function slugify(value: string) {
     .slice(0, 48);
 }
 
-async function readAdmittedAssurancePlan(env: Bindings, repo: string, sha: string) {
+async function readAdmittedAssurancePlan(env: Bindings, rawRepo: string, rawSha: string) {
+  const repo = canonicalRepo(rawRepo);
+  const sha = canonicalSha(rawSha);
   const admissionObject = await env.BACKUP_BUCKET.get(assuranceAdmissionKey(repo, sha));
   if (admissionObject === null) return null;
   if (admissionObject.size > MAX_ASSURANCE_ADMISSION_BYTES) {
@@ -136,8 +175,8 @@ async function readAdmittedAssurancePlan(env: Bindings, repo: string, sha: strin
   const policy = record(admission.policy, 'persisted assurance policy');
   if (
     admission.schemaVersion !== 1
-    || admission.repo !== repo
-    || admission.sha !== sha
+    || String(admission.repo ?? '').toLowerCase() !== repo
+    || String(admission.sha ?? '').toLowerCase() !== sha
     || typeof admission.planKey !== 'string'
     || typeof admission.planDigest !== 'string'
     || !/^sha256:[a-f0-9]{64}$/.test(admission.planDigest)
@@ -147,7 +186,7 @@ async function readAdmittedAssurancePlan(env: Bindings, repo: string, sha: strin
   ) {
     throw new Error('persisted assurance admission is invalid');
   }
-  const expectedPrefix = `assurance-plans/${repo.toLowerCase()}/${sha.toLowerCase()}/`;
+  const expectedPrefix = `assurance-plans/${repo}/${sha}/`;
   if (!admission.planKey.startsWith(expectedPrefix)) {
     throw new Error('persisted assurance admission points outside the admitted subject namespace');
   }
@@ -159,9 +198,6 @@ async function readAdmittedAssurancePlan(env: Bindings, repo: string, sha: strin
   }
   const planText = await planObject.text();
 
-  // Re-run the independent minimum policy on readback. This verifies both the
-  // content digest and that the currently served control plane still agrees
-  // with the policy identity/digest that admitted this source object.
   const admitted = await admitFireCrabAssurancePlan(planText, sha);
   if (
     admitted.planDigest !== admission.planDigest
@@ -170,11 +206,144 @@ async function readAdmittedAssurancePlan(env: Bindings, repo: string, sha: strin
   ) {
     throw new Error('persisted assurance admission failed digest/policy verification');
   }
-  return { admission, plan: admitted.plan };
+  return { repo, sha, admission, plan: admitted.plan };
+}
+
+function validateNativeReceipt(
+  value: Record<string, unknown>,
+  repo: string,
+  sha: string,
+  planDigest: string,
+): Record<string, unknown> {
+  if (
+    value.schemaVersion !== 1
+    || value.profile !== 'firecrab-release-assurance-v1'
+    || String(value.repo ?? '').toLowerCase() !== repo
+    || String(value.sha ?? '').toLowerCase() !== sha
+    || value.planDigest !== planDigest
+    || value.nativeJobCount !== 10
+    || !Array.isArray(value.jobs)
+    || value.jobs.length !== 10
+  ) {
+    throw new Error('native assurance receipt identity/coverage is invalid');
+  }
+  return value;
+}
+
+function validateFinalReceipt(
+  value: Record<string, unknown>,
+  admitted: NonNullable<Awaited<ReturnType<typeof readAdmittedAssurancePlan>>>,
+): Record<string, unknown> {
+  const policy = record(value.policy, 'final assurance policy');
+  const admittedPolicy = record(admitted.admission.policy, 'admitted assurance policy');
+  if (
+    value.schemaVersion !== 1
+    || value.profile !== 'firecrab-release-assurance-v1'
+    || String(value.repo ?? '').toLowerCase() !== admitted.repo
+    || String(value.sha ?? '').toLowerCase() !== admitted.sha
+    || value.verdict !== 'PASS'
+    || value.planDigest !== admitted.admission.planDigest
+    || policy.id !== admittedPolicy.id
+    || policy.digest !== admittedPolicy.digest
+    || typeof value.nativeReceipt !== 'string'
+  ) {
+    throw new Error('final assurance receipt identity/policy is invalid');
+  }
+
+  const aggregate = record(value.aggregate, 'final aggregate assurance verdict');
+  const counts = record(aggregate.counts, 'final aggregate assurance counts');
+  if (
+    aggregate.schemaVersion !== 1
+    || aggregate.profile !== 'firecrab-release-assurance-v1'
+    || String(aggregate.sha ?? '').toLowerCase() !== admitted.sha
+    || aggregate.verdict !== 'PASS'
+    || !Array.isArray(aggregate.components)
+    || aggregate.components.length !== EXPECTED_ASSURANCE_COMPONENTS
+    || counts.PASS !== EXPECTED_ASSURANCE_COMPONENTS
+    || counts.FAIL !== 0
+    || counts.BLOCKED !== 0
+  ) {
+    throw new Error('final aggregate assurance verdict is incomplete or not PASS');
+  }
+  return value;
+}
+
+async function readAssuranceResult(env: Bindings, repoInput: string, shaInput: string) {
+  const admitted = await readAdmittedAssurancePlan(env, repoInput, shaInput);
+  const repo = canonicalRepo(repoInput);
+  const sha = canonicalSha(shaInput);
+  if (admitted === null) {
+    return { found: false, certified: false, stage: 'admission', repo, sha };
+  }
+
+  const planDigest = String(admitted.admission.planDigest);
+  const finalKey = assuranceReceiptKey('final', repo, sha, planDigest);
+  const final = await readBoundedObject(
+    env,
+    finalKey,
+    MAX_ASSURANCE_RECEIPT_BYTES,
+    'final assurance receipt',
+  );
+  if (final !== null) {
+    const receipt = validateFinalReceipt(final, admitted);
+    const expectedNativeKey = assuranceReceiptKey('native', repo, sha, planDigest);
+    if (receipt.nativeReceipt !== expectedNativeKey) {
+      throw new Error('final assurance receipt points at the wrong native receipt');
+    }
+    const native = await readBoundedObject(
+      env,
+      expectedNativeKey,
+      MAX_ASSURANCE_RECEIPT_BYTES,
+      'native assurance receipt',
+    );
+    if (native === null) throw new Error('final assurance receipt references missing native evidence');
+    validateNativeReceipt(native, repo, sha, planDigest);
+    return {
+      found: true,
+      certified: true,
+      stage: 'final',
+      repo,
+      sha,
+      policy: admitted.admission.policy,
+      planDigest,
+      receiptKey: finalKey,
+      receipt,
+    };
+  }
+
+  const nativeKey = assuranceReceiptKey('native', repo, sha, planDigest);
+  const native = await readBoundedObject(
+    env,
+    nativeKey,
+    MAX_ASSURANCE_RECEIPT_BYTES,
+    'native assurance receipt',
+  );
+  if (native === null) {
+    return {
+      found: true,
+      certified: false,
+      stage: 'native-pending',
+      repo,
+      sha,
+      policy: admitted.admission.policy,
+      planDigest,
+    };
+  }
+  return {
+    found: true,
+    certified: false,
+    stage: 'native',
+    repo,
+    sha,
+    policy: admitted.admission.policy,
+    planDigest,
+    receiptKey: nativeKey,
+    receipt: validateNativeReceipt(native, repo, sha, planDigest),
+  };
 }
 
 function createCiMcpServer(env: Bindings) {
-  const server = new McpServer({ name: 'gitflare-ci', version: '0.1.0' });
+  const server = new McpServer({ name: 'gitflare-ci', version: '0.2.0' });
 
   server.registerTool(
     'ci_run_start',
@@ -254,7 +423,33 @@ function createCiMcpServer(env: Bindings) {
       try {
         const admitted = await readAdmittedAssurancePlan(env, repo, sha);
         if (admitted === null) return result({ found: false, repo, sha });
-        return result({ found: true, repo, sha, ...admitted });
+        return result({ found: true, repo: admitted.repo, sha: admitted.sha, admission: admitted.admission, plan: admitted.plan });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'ci_assurance_result',
+    {
+      title: 'Get assurance certification result',
+      description:
+        'Verify and return the externally admitted FireCrab native assurance result. certified=true is returned only for a policy/digest-verified 11-component PASS receipt.',
+      inputSchema: z.object({
+        repo: repoSchema.describe('Artifacts repository name'),
+        sha: shaSchema.describe('Git commit object id'),
+      }),
+      annotations: {
+        title: 'Get assurance certification result',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async ({ repo, sha }) => {
+      try {
+        return result(await readAssuranceResult(env, repo, sha));
       } catch (error) {
         return failure(error);
       }
