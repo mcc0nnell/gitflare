@@ -10,10 +10,7 @@
       "head_sampling_rate": 1
     }
   },
-  "artifacts": [
-    {
-      "binding": "ARTIFACTS",
-      "namespace": "gitflare"
-    }
-  ]
+  "vars": {
+    "GITFLARE_SOURCE_PLANE_MODE": "unavailable"
+  }
 }
