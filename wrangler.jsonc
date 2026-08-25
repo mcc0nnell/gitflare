@@ -15,5 +15,11 @@
       "binding": "ARTIFACTS",
       "namespace": "gitflare"
     }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "EVIDENCE",
+      "bucket_name": "gitflare-evidence"
+    }
   ]
 }
