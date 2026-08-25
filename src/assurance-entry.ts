@@ -16,7 +16,7 @@ interface ArtifactsBinding {
   get(name: string): Promise<ArtifactRepoHandle>;
 }
 
-interface AssuranceEnv {
+export interface AssuranceEnv {
   ARTIFACTS: ArtifactsBinding;
   GITFLARE_ADMIN_TOKEN: string;
   /**
@@ -71,7 +71,7 @@ function configuredRemoteBase(env: AssuranceEnv): string {
   return base;
 }
 
-async function sourceTicket(
+export async function handleAssuranceSourceTicket(
   request: Request,
   env: AssuranceEnv,
   repoName: string,
@@ -112,8 +112,8 @@ async function sourceTicket(
     return json({ error: 'canonical Artifacts repository is unavailable', code: 'ARTIFACTS_REPO_UNAVAILABLE' }, 502);
   }
 
-  // This is the authority check. A GitHub mirror is not enough: the exact
-  // immutable commit must be readable from the canonical Artifacts repo.
+  // This is the source-authority check. A GitHub mirror is insufficient: the
+  // exact immutable commit must be readable from the canonical Artifacts repo.
   try {
     await repo.readCommit(sha);
   } catch {
@@ -152,7 +152,7 @@ export default {
     const match = /^\/repos\/([^/]+)\/assurance\/source-ticket\/?$/.exec(url.pathname);
     if (match) {
       if (request.method !== 'POST') return json({ error: 'method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
-      return sourceTicket(request, env, decodeURIComponent(match[1]));
+      return handleAssuranceSourceTicket(request, env, decodeURIComponent(match[1]));
     }
     return baseHandler.fetch(request, env as never);
   },
