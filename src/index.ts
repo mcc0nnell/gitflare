@@ -42,6 +42,8 @@ interface ArtifactsBinding {
 interface Env {
   ARTIFACTS: ArtifactsBinding;
   GITFLARE_ADMIN_TOKEN: string;
+  GITFLARE_SOURCE_BROKER_TOKEN?: string;
+  GITFLARE_ARTIFACTS_ACCOUNT_ID?: string;
 }
 
 interface CreateRepoBody {
@@ -56,6 +58,17 @@ interface CreateTokenBody {
   ttl?: unknown;
 }
 
+interface SourceLeaseBody {
+  repo?: unknown;
+  sha?: unknown;
+  ref?: unknown;
+  ttl?: unknown;
+}
+
+const REPO_NAME = /^[A-Za-z0-9._-]{1,96}$/;
+const GIT_OBJECT_ID = /^[a-f0-9]{40}([a-f0-9]{24})?$/i;
+const ACCOUNT_ID = /^[a-f0-9]{32}$/i;
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -66,9 +79,25 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+function secretMatches(presented: string | null, expected: string | undefined): boolean {
+  if (!expected || !presented) return false;
+  const prefix = 'Bearer ';
+  if (!presented.startsWith(prefix)) return false;
+  const value = presented.slice(prefix.length);
+  if (value.length !== expected.length) return false;
+  let difference = 0;
+  for (let index = 0; index < expected.length; index += 1) {
+    difference |= value.charCodeAt(index) ^ expected.charCodeAt(index);
+  }
+  return difference === 0;
+}
+
 function authorized(request: Request, env: Env): boolean {
-  if (!env.GITFLARE_ADMIN_TOKEN) return false;
-  return request.headers.get('authorization') === `Bearer ${env.GITFLARE_ADMIN_TOKEN}`;
+  return secretMatches(request.headers.get('authorization'), env.GITFLARE_ADMIN_TOKEN);
+}
+
+function sourceBrokerAuthorized(request: Request, env: Env): boolean {
+  return secretMatches(request.headers.get('authorization'), env.GITFLARE_SOURCE_BROKER_TOKEN);
 }
 
 function requireString(value: unknown, label: string): string {
@@ -94,6 +123,14 @@ function tokenTtl(value: unknown): number {
   if (!Number.isSafeInteger(value)) throw new Error('ttl must be an integer number of seconds');
   const ttl = Number(value);
   if (ttl < 60 || ttl > 3600) throw new Error('ttl must be between 60 and 3600 seconds');
+  return ttl;
+}
+
+function sourceLeaseTtl(value: unknown): number {
+  if (value === undefined || value === null) return 300;
+  if (!Number.isSafeInteger(value)) throw new Error('ttl must be an integer number of seconds');
+  const ttl = Number(value);
+  if (ttl < 60 || ttl > 600) throw new Error('source lease ttl must be between 60 and 600 seconds');
   return ttl;
 }
 
@@ -153,6 +190,36 @@ async function createRepoToken(request: Request, env: Env, repoName: string): Pr
   }, 201);
 }
 
+async function createSourceLease(request: Request, env: Env): Promise<Response> {
+  if (!sourceBrokerAuthorized(request, env)) return json({ error: 'Unauthorized' }, 401);
+  const body = await readJson<SourceLeaseBody>(request);
+  const repoName = requireString(body.repo, 'repo');
+  const sha = requireString(body.sha, 'sha').toLowerCase();
+  const ref = requireString(body.ref, 'ref');
+  if (!REPO_NAME.test(repoName)) throw new Error('repo is invalid');
+  if (!GIT_OBJECT_ID.test(sha)) throw new Error('sha must be a Git object id');
+  if (!(ref.startsWith('refs/heads/') || ref.startsWith('refs/tags/')) || /[\u0000-\u001f\u007f]/.test(ref)) {
+    throw new Error('ref must be a printable heads or tags ref');
+  }
+  const accountId = (env.GITFLARE_ARTIFACTS_ACCOUNT_ID ?? '').trim();
+  if (!ACCOUNT_ID.test(accountId)) throw new Error('Gitflare Artifacts account id is not configured');
+  const ttl = sourceLeaseTtl(body.ttl);
+  const repo = await env.ARTIFACTS.get(repoName);
+  const token = await repo.createToken('read', ttl);
+  const remote = `https://${accountId}.artifacts.cloudflare.net/git/gitflare/${encodeURIComponent(repoName)}.git`;
+  return json({
+    schemaVersion: 1,
+    provider: 'cloudflare-artifacts',
+    namespace: 'gitflare',
+    repo: repoName,
+    sha,
+    ref,
+    remote,
+    token: token.plaintext,
+    expiresAt: token.expiresAt ?? null,
+  }, 201);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -164,6 +231,17 @@ export default {
         sourcePlane: 'cloudflare-artifacts',
         namespace: 'gitflare',
       });
+    }
+
+    // Narrow service-to-service source authority: this path can only mint a
+    // short-lived read token. It never accepts a caller-selected scope and does
+    // not share the administrative bearer credential.
+    if (request.method === 'POST' && url.pathname === '/internal/source-leases') {
+      try {
+        return await createSourceLease(request, env);
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : 'Unknown error' }, 400);
+      }
     }
 
     if (!authorized(request, env)) {
