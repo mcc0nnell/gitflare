@@ -156,4 +156,4 @@ export default {
     }
     return baseHandler.fetch(request, env as never);
   },
-} satisfies ExportedHandler<AssuranceEnv>;
+};
