@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "wrangler dev --remote",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && wrangler deploy --dry-run",
+    "test": "tsx --test test/*.test.ts",
+    "check": "npm run typecheck && npm test && wrangler deploy --dry-run",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {
+    "tsx": "^4.20.0",
     "typescript": "5.9.3",
     "wrangler": "4.124.0"
   }
