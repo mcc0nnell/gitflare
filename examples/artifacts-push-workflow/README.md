@@ -30,8 +30,7 @@ Atlas / Shell / TalkPipe / agents
        @cloudflare/ci
 ```
 
-There is intentionally no language-specific build and no deployment step here.
-The purpose of this example is to prove the provider-neutral handoff from source revision to isolated execution and a thin agent-operable control seam over it.
+The generic Gitflare pipeline remains provider-neutral. Repository-specific policy is selected only after `verify-source`; for example, an Artifacts repository named `firecrab` runs the release-compliance contract versioned inside FireCrab itself.
 
 ## Prerequisites
 
@@ -39,31 +38,36 @@ The purpose of this example is to prove the provider-neutral handoff from source
 - the `gitflare` Artifacts namespace
 - an R2 bucket named `gitflare-ci-backups`
 - an authenticated Wrangler environment
-- the Cloudflare account ID filled into `wrangler.jsonc`
-- the MCP Worker hostname filled into `wrangler.jsonc`
-- the secrets required by `@cloudflare/ci` / Sandbox snapshot handling
-- a `GITFLARE_CI_MCP_TOKEN` Worker secret for MCP access
+- the Worker secrets required by `@cloudflare/ci` / Sandbox snapshot handling
+- the Gitflare CI identity and MCP secrets described below
 
-Use the current `@cloudflare/ci` documentation as the source of truth for its required runner and R2 credentials.
+Use the current `@cloudflare/ci` documentation as the source of truth for runner and R2 credentials.
 
 ## Configure
 
-Replace both placeholders in `wrangler.jsonc`:
+Repository configuration contains no account-ID or MCP-host placeholders. Runtime identity is supplied as Worker secret bindings so this branch remains portable and does not need account-specific edits.
 
-```text
-replace-with-your-cloudflare-account-id
-replace-with-your-ci-worker-host
-```
-
-`GITFLARE_CI_MCP_HOST` is a hostname only, without a scheme or path, for example `gitflare-artifacts-ci.example.workers.dev` or the hostname of a configured custom domain.
-
-Set the MCP bearer secret:
+Configure the source/runtime bindings:
 
 ```bash
+npx wrangler secret put CLOUDFLARE_ACCOUNT_ID
+npx wrangler secret put CF_TOKEN
+npx wrangler secret put R2_ACCESS_KEY_ID
+npx wrangler secret put R2_SECRET_ACCESS_KEY
+```
+
+`CLOUDFLARE_ACCOUNT_ID` is not itself a credential; it is kept out of the committed example so the same source can be deployed into another account without editing tracked configuration. `@cloudflare/ci` uses it to construct the Cloudflare Artifacts Git remote for isolated checkout.
+
+Configure the MCP boundary:
+
+```bash
+npx wrangler secret put GITFLARE_CI_MCP_HOST
 npx wrangler secret put GITFLARE_CI_MCP_TOKEN
 ```
 
-Then install dependencies and generate binding types:
+`GITFLARE_CI_MCP_HOST` is a hostname only, without a scheme or path, for example the Worker's `workers.dev` hostname or a configured custom domain. The token protects the complete `/mcp` surface.
+
+Then install dependencies and validate the Worker before deployment:
 
 ```bash
 npm install
@@ -72,11 +76,19 @@ npm run typecheck
 npm run build
 ```
 
-Deploy only after the Artifacts namespace and backup bucket exist and the required secrets are configured:
+Deploy only after the Artifacts namespace, backup bucket, and required secret bindings exist:
 
 ```bash
 npm run deploy
 ```
+
+## FireCrab clean-room profile
+
+When `repo === "firecrab"`, the verified source snapshot is chained into a second runner named `release-compliance-preflight`. It invokes `scripts/gitflare-release-compliance.sh` from the exact checked-out FireCrab commit.
+
+The profile deliberately does not declare a CI cache. It verifies the expected object ID again, refuses dirty source state, runs compliance unit tests with Python optimization enabled, runs M2Image/host packaging contracts, resolves Cargo and npm dependency state into per-run scratch directories, regenerates the release inventory with `--deny-incompatible`, discards dependency scratch state, and retains a hash-bound `dist/gitflare-receipts.tar.gz` in the successful runner snapshot.
+
+This is a **preflight**, not the complete release matrix: full native x86_64/aarch64 builds and real Alpine/Ubuntu/Rocky corresponding-source materialization remain later assurance stages.
 
 ## MCP tools
 
@@ -101,7 +113,7 @@ Gitflare should not require a separately authored CI controller for each reposit
 
 The trigger filter selects the `gitflare` namespace but deliberately omits a repository name. Each push still creates its own Workflow instance for the repository/ref/commit that changed.
 
-Later Gitflare policy can choose a project-specific profile after checkout.
+Gitflare policy selects any project-specific profile only after the common source verification boundary.
 
 ## First invariant
 
