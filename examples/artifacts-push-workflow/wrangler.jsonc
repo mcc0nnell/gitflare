@@ -62,9 +62,7 @@
     }
   ],
   "vars": {
-    "BACKUP_BUCKET_NAME": "gitflare-ci-backups",
-    "CLOUDFLARE_ACCOUNT_ID": "replace-with-your-cloudflare-account-id",
-    "GITFLARE_CI_MCP_HOST": "replace-with-your-ci-worker-host"
+    "BACKUP_BUCKET_NAME": "gitflare-ci-backups"
   },
   "observability": {
     "enabled": true,
