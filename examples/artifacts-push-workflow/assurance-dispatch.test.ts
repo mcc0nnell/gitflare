@@ -129,11 +129,12 @@ test('dispatcher refuses a plan/source object mismatch', async () => {
   );
 });
 
-test('private Shell dispatch carries semantic requirements and no source credential', async () => {
+test('private Shell dispatch carries semantic requirements and deterministic request identity', async () => {
   const admission = await admitFireCrabAssurancePlan(planText(), SHA);
   const job = nativeDispatchJobs(admission, SOURCE)[0];
   const seen: Request[] = [];
   const buildId = '123e4567-e89b-42d3-a456-426614174000';
+  let observedRequestId = '';
   const shell: ShellService = {
     async fetch(input) {
       const request = input instanceof Request ? input : new Request(input);
@@ -147,22 +148,28 @@ test('private Shell dispatch carries semantic requirements and no source credent
         }, { status: 201 });
       }
       const body = await request.json() as Record<string, unknown>;
+      observedRequestId = String(body.requestId);
+      assert.match(observedRequestId, /^[0-9a-f-]{36}$/);
       const source = body.source as Record<string, unknown>;
       assert.equal(source.sha, SHA);
       assert.equal('token' in source, false);
       assert.equal('remote' in source, false);
       assert.equal((body.requirements as Record<string, unknown>).architecture, job.architecture);
-      return Response.json({ buildId, architecture: job.architecture, source: job.source }, { status: 201 });
+      return Response.json({
+        requestId: observedRequestId,
+        buildId,
+        architecture: job.architecture,
+        source: job.source,
+      }, { status: 201 });
     },
   };
 
-  const dispatched = await dispatchNativeJob(
-    shell,
-    assuranceWorkspaceId('firecrab', SHA),
-    job,
-  );
-  assert.equal(dispatched.buildId, buildId);
-  assert.equal(seen.length, 2);
+  const workspaceId = assuranceWorkspaceId('firecrab', SHA);
+  const first = await dispatchNativeJob(shell, workspaceId, job);
+  const second = await dispatchNativeJob(shell, workspaceId, job);
+  assert.equal(first.buildId, buildId);
+  assert.equal(first.requestId, second.requestId);
+  assert.equal(seen.length, 4);
   assert.equal(new URL(seen[0].url).pathname, '/internal/v1/approvals');
   assert.match(new URL(seen[1].url).pathname, /\/assurance-builds$/);
   assert.equal(seen[1].headers.get('x-scumm-shell-admission'), 'approved');
@@ -188,6 +195,7 @@ test('status and log reads stay bound to the architecture selected at trigger', 
   };
   const dispatched = {
     jobId: job.jobId,
+    requestId: '123e4567-e89b-42d3-a456-426614174001',
     architecture: job.architecture,
     buildId,
     workspaceId: assuranceWorkspaceId('firecrab', SHA),
