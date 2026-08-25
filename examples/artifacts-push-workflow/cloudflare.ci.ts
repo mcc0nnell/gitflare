@@ -4,18 +4,16 @@ import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import type { Bindings } from './env';
 
 const GIT_OBJECT_ID = /^[a-f0-9]{40}([a-f0-9]{24})?$/i;
+const ASSURANCE_REPO = /^[A-Za-z0-9._-]{1,96}$/;
 const PREFLIGHT_STEP_TIMEOUT_MS = 31 * 60 * 1000;
 const PREFLIGHT_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_ASSURANCE_PLAN_BYTES = 256 * 1024;
 
 function assurancePlanKey(repo: string, sha: string) {
-  const safeRepo = repo
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 96);
-  if (!safeRepo) throw new Error(`invalid assurance repository name: ${repo}`);
-  return `assurance-plans/${safeRepo}/${sha.toLowerCase()}.json`;
+  if (!ASSURANCE_REPO.test(repo)) {
+    throw new Error(`invalid assurance repository name: ${repo}`);
+  }
+  return `assurance-plans/${repo.toLowerCase()}/${sha.toLowerCase()}.json`;
 }
 
 async function readBoundedLog(
