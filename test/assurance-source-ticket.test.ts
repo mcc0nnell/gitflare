@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
+import assuranceHandler, {
   handleAssuranceSourceTicket,
   sourcePlaneStatus,
   type AssuranceEnv,
@@ -55,6 +55,30 @@ test('pre-entitlement Gitflare is healthy but canonical source is explicitly una
   assert.equal(status.mode, 'unavailable');
   assert.equal(status.bindingPresent, false);
   assert.equal(status.reason, 'cloudflare-artifacts-access-unavailable');
+});
+
+test('pre-entitlement HTTP health and source-plane routes require no Artifacts binding', async () => {
+  const preAccess: AssuranceEnv = { GITFLARE_SOURCE_PLANE_MODE: 'unavailable' };
+
+  const health = await assuranceHandler.fetch(
+    new Request('https://gitflare.example/healthz'),
+    preAccess,
+  );
+  assert.equal(health.status, 200);
+  const healthBody = await health.json() as Record<string, any>;
+  assert.equal(healthBody.ok, true);
+  assert.equal(healthBody.sourcePlane.available, false);
+  assert.equal(healthBody.sourcePlane.reason, 'cloudflare-artifacts-access-unavailable');
+
+  const source = await assuranceHandler.fetch(
+    new Request('https://gitflare.example/v1/source-plane'),
+    preAccess,
+  );
+  assert.equal(source.status, 200);
+  const sourceBody = await source.json() as Record<string, any>;
+  assert.equal(sourceBody.authority, 'gitflare');
+  assert.equal(sourceBody.available, false);
+  assert.equal(sourceBody.canonical, false);
 });
 
 test('pre-entitlement source ticket returns typed BLOCKED without touching Artifacts', async () => {
