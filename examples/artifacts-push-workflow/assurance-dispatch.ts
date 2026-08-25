@@ -44,6 +44,7 @@ export interface NativeDispatchJob {
 
 export interface DispatchedNativeJob {
   jobId: string;
+  requestId: string;
   architecture: NativeArchitecture;
   buildId: string;
   workspaceId: string;
@@ -79,9 +80,31 @@ export function assuranceWorkspaceId(repo: string, sha: string): string {
   return `gitflare-assurance-${repo.toLowerCase()}-${sha.toLowerCase().slice(0, 32)}`;
 }
 
+async function deterministicRequestId(job: NativeDispatchJob): Promise<string> {
+  const subject = [
+    'gitflare-assurance-native-v1',
+    job.source.provider,
+    job.source.namespace,
+    job.source.repo.toLowerCase(),
+    job.source.sha.toLowerCase(),
+    job.jobId,
+  ].join('\0');
+  const digest = new Uint8Array(await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(subject),
+  ));
+  const bytes = digest.slice(0, 16);
+  // Deterministic RFC 4122-shaped UUID. Version 5 bits communicate that this
+  // is name-derived; SHA-256 is used as the digest rather than SHA-1.
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function planJobs(admission: AssuranceAdmission): Map<string, JsonRecord> {
   const plan = record(admission.plan, 'assurance plan');
-  if (plan.sha !== admission.plan.sha || !Array.isArray(plan.jobs)) {
+  if (!Array.isArray(plan.jobs)) {
     throw new Error('assurance admission does not contain a valid plan');
   }
   const jobs = new Map<string, JsonRecord>();
@@ -239,6 +262,7 @@ export async function dispatchNativeJob(
   workspaceId: string,
   job: NativeDispatchJob,
 ): Promise<DispatchedNativeJob> {
+  const requestId = await deterministicRequestId(job);
   const approvalId = await issueBuildApproval(shell, workspaceId, job.source, job.jobId);
   const body = await shellJson(
     shell,
@@ -251,6 +275,7 @@ export async function dispatchNativeJob(
         'x-scumm-shell-approval-id': approvalId,
       },
       body: JSON.stringify({
+        requestId,
         label: job.label,
         argv: job.argv,
         requirements: job.requirements,
@@ -259,6 +284,9 @@ export async function dispatchNativeJob(
     },
   );
 
+  if (body.requestId !== requestId) {
+    throw new Error(`SCUMM Shell changed requestId for ${job.jobId}`);
+  }
   if (body.architecture !== job.architecture) {
     throw new Error(`SCUMM Shell changed architecture for ${job.jobId}`);
   }
@@ -272,6 +300,7 @@ export async function dispatchNativeJob(
   }
   return {
     jobId: job.jobId,
+    requestId,
     architecture: job.architecture,
     buildId: buildId.toLowerCase(),
     workspaceId,
