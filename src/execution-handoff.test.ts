@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { handleExecutionHandoff, type HandoffEnv } from './execution-handoff.js';
+import { handleExecutionHandoff, type HandoffEnv } from './execution-handoff.ts';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 
