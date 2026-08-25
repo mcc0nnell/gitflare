@@ -10,10 +10,15 @@ import type { Bindings } from '../env';
 
 const NAMESPACE = 'gitflare';
 const PROVIDER = 'cloudflare-artifacts';
+const MAX_ASSURANCE_PLAN_BYTES = 256 * 1024;
 
 const shaSchema = z
   .string()
   .regex(/^[a-f0-9]{40}([a-f0-9]{24})?$/i, 'sha must be a 40- or 64-character hex Git object id');
+
+const repoSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9._-]{1,96}$/, 'repo must contain only letters, digits, dot, underscore, or hyphen');
 
 const refSchema = z
   .string()
@@ -35,6 +40,13 @@ function failure(error: unknown) {
     content: [{ type: 'text' as const, text: message }],
     isError: true,
   };
+}
+
+function assurancePlanKey(repo: string, sha: string) {
+  if (!/^[A-Za-z0-9._-]{1,96}$/.test(repo)) {
+    throw new Error(`invalid assurance repository name: ${repo}`);
+  }
+  return `assurance-plans/${repo.toLowerCase()}/${sha.toLowerCase()}.json`;
 }
 
 async function authorized(request: Request, env: Bindings): Promise<boolean> {
@@ -114,7 +126,7 @@ function createCiMcpServer(env: Bindings) {
       description:
         'Start the Gitflare Cloudflare CI workflow for a Git commit in the gitflare Artifacts namespace. Idempotent for the same repository and commit.',
       inputSchema: z.object({
-        repo: z.string().min(1).describe('Artifacts repository name'),
+        repo: repoSchema.describe('Artifacts repository name'),
         sha: shaSchema.describe('Git commit object id'),
         ref: refSchema.describe('Full Git ref, for example refs/heads/main'),
         beforeSha: shaSchema.optional().describe('Previous Git object id, when known'),
@@ -158,6 +170,52 @@ function createCiMcpServer(env: Bindings) {
       try {
         const instance = await env.CI_WORKFLOW.get(id);
         return result({ id, ...(await instance.status()) });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'ci_assurance_plan',
+    {
+      title: 'Get assurance plan',
+      description:
+        'Read the project-emitted assurance work plan persisted after a successful source-bound preflight.',
+      inputSchema: z.object({
+        repo: repoSchema.describe('Artifacts repository name'),
+        sha: shaSchema.describe('Git commit object id'),
+      }),
+      annotations: {
+        title: 'Get assurance plan',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async ({ repo, sha }) => {
+      try {
+        const key = assurancePlanKey(repo, sha);
+        const object = await env.BACKUP_BUCKET.get(key);
+        if (object === null) {
+          return result({ found: false, repo, sha });
+        }
+        if (object.size > MAX_ASSURANCE_PLAN_BYTES) {
+          throw new Error('persisted assurance plan exceeds maximum size');
+        }
+        const text = await object.text();
+        const value: unknown = JSON.parse(text);
+        if (typeof value !== 'object' || value === null) {
+          throw new Error('persisted assurance plan is not a JSON object');
+        }
+        const plan = value as Record<string, unknown>;
+        if (plan.schemaVersion !== 1 || plan.sha !== sha) {
+          throw new Error('persisted assurance plan subject does not match request');
+        }
+        if (!Array.isArray(plan.jobs) || plan.jobs.length === 0 || plan.jobCount !== plan.jobs.length) {
+          throw new Error('persisted assurance plan has invalid job coverage');
+        }
+        return result({ found: true, repo, sha, plan });
       } catch (error) {
         return failure(error);
       }
