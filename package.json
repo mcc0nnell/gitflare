@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "wrangler dev --remote",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && wrangler deploy --dry-run",
+    "test": "node --experimental-strip-types --test src/execution-handoff.test.ts",
+    "check": "npm run typecheck && npm test && wrangler deploy --dry-run",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {
