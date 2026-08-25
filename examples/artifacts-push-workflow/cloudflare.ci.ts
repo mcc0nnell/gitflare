@@ -1,5 +1,5 @@
 import { CIWorkflow } from '@cloudflare/ci';
-import type { CiContext, CiParams, CiRunnerLogs, CloudflareArtifacts } from '@cloudflare/ci';
+import type { CiContext, CiParams, CloudflareArtifacts } from '@cloudflare/ci';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import type { Bindings } from './env';
 
@@ -19,7 +19,7 @@ function assurancePlanKey(repo: string, sha: string) {
 }
 
 async function readBoundedLog(
-  value: CiRunnerLogs['stdout'],
+  value: string | ReadableStream<Uint8Array>,
   maxBytes = MAX_ASSURANCE_PLAN_BYTES,
 ): Promise<string> {
   if (typeof value === 'string') {
