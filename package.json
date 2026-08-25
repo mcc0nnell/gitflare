@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --remote",
+    "dev": "wrangler dev --remote --config wrangler.jsonc",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
-    "check": "npm run typecheck && npm test && wrangler deploy --dry-run",
-    "deploy": "wrangler deploy"
+    "check": "npm run typecheck && npm test && wrangler deploy --dry-run --config wrangler.jsonc",
+    "check:artifacts": "npm run typecheck && npm test && wrangler deploy --dry-run --config wrangler.artifacts.jsonc",
+    "deploy": "wrangler deploy --config wrangler.jsonc",
+    "deploy:artifacts": "wrangler deploy --config wrangler.artifacts.jsonc"
   },
   "devDependencies": {
     "tsx": "^4.20.0",
