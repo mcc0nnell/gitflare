@@ -28,23 +28,35 @@ python talkpipe/ci_mcp.py ci_run_start \
 
 The start operation is source-idempotent. A push-triggered run and an MCP-triggered run for the same Artifacts repository and commit resolve to the same Cloudflare Workflow instance ID.
 
-## FireCrab release-compliance preflight
+## FireCrab release assurance
 
-When the Artifacts repository is named `firecrab`, Gitflare selects the `release-compliance-preflight` profile after the normal `verify-source` boundary. The profile itself is versioned in FireCrab as `scripts/gitflare-release-compliance.sh`; Gitflare does not carry FireCrab's compliance policy.
+When the Artifacts repository is named `firecrab`, Gitflare selects the project-owned `release-compliance-preflight` after the normal `verify-source` boundary. The executable policy is versioned with FireCrab; Gitflare does not carry FireCrab's compliance matrix.
 
 ```bash
 python talkpipe/ci_mcp.py ci_run_start \
   '{"repo":"firecrab","sha":"<exact-firecrab-sha>","ref":"refs/heads/<branch>"}'
 ```
 
-The preflight deliberately has no cross-run CI cache. It verifies the exact checked-out object ID, refuses a dirty checkout, runs the Python compliance tests with `PYTHONOPTIMIZE=1`, runs the M2Image and host-package contracts, rebuilds Cargo/npm dependency state in per-run scratch directories, regenerates the release license inventory with `--deny-incompatible`, and emits a hash-bound receipt bundle at `dist/gitflare-receipts.tar.gz` in the successful runner snapshot.
+The preflight deliberately has no cross-run CI cache. It verifies the exact checked-out object ID, refuses a dirty checkout, runs the Python compliance tests with `PYTHONOPTIMIZE=1`, runs the M2Image and host-package contracts, rebuilds Cargo/npm dependency state in per-run scratch directories, regenerates the release license inventory with `--deny-incompatible`, and emits a hash-bound receipt bundle.
 
-The successful profile discards its Cargo/npm scratch state before the final snapshot. The retained snapshot is evidence, not a dependency cache.
+The receipt also contains `assurance-plan.json`, expanded from FireCrab's versioned profile and M2Image manifest. Gitflare persists that plan under the exact repository/SHA after a successful preflight. TalkPipe can retrieve it without knowing FireCrab's matrix:
 
-## Inspect, retry, or cancel
+```bash
+python talkpipe/ci_mcp.py ci_assurance_plan \
+  '{"repo":"firecrab","sha":"<exact-firecrab-sha>"}'
+```
+
+For the current FireCrab profile the plan contains twelve jobs: one sandbox preflight, six native/root M2Image + corresponding-source cells, four native host-release cells, and one evidence aggregator. The ten native jobs declare their architecture, privilege/network requirements, expected evidence path, and dependency on the preflight.
+
+A native executor must honor each job's `constraints` and use a disposable checkout of the same SHA. A missing runner capability is represented by the project's `BLOCKED` result; it is not converted into PASS and should not be confused with a FireCrab test failure. Once all native result documents are collected, the aggregate job emits the source-bound `PASS`, `FAIL`, or `BLOCKED` assurance verdict.
+
+The successful preflight discards its Cargo/npm scratch state before the final snapshot. The retained snapshot is evidence, not a dependency cache.
+
+## Inspect, retrieve, retry, or cancel
 
 ```bash
 python talkpipe/ci_mcp.py ci_run_status '{"id":"ci-..."}'
+python talkpipe/ci_mcp.py ci_assurance_plan '{"repo":"firecrab","sha":"<commit-sha>"}'
 python talkpipe/ci_mcp.py ci_run_retry '{"id":"ci-..."}'
 python talkpipe/ci_mcp.py ci_run_retry '{"id":"ci-...","fromStep":"verify-source"}'
 python talkpipe/ci_mcp.py ci_run_cancel '{"id":"ci-...","rollback":false}'
