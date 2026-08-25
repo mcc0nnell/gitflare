@@ -65,8 +65,8 @@ function env(bucket = new Bucket()): EvidenceEnv {
   };
 }
 
-async function handoff(e: EvidenceEnv): Promise<any> {
-  const request = new Request('https://gitflare.example/repos/firecrab/evidence-handoffs', {
+async function handoff(e: EvidenceEnv, repo = 'firecrab'): Promise<any> {
+  const request = new Request(`https://gitflare.example/repos/${repo}/evidence-handoffs`, {
     method: 'POST',
     headers: {
       authorization: 'Bearer admin',
@@ -74,7 +74,7 @@ async function handoff(e: EvidenceEnv): Promise<any> {
     },
     body: JSON.stringify({ sha: SHA }),
   });
-  const response = await handleEvidenceHandoff(request, e, 'firecrab');
+  const response = await handleEvidenceHandoff(request, e, repo);
   assert.equal(response.status, 201);
   return response.json();
 }
@@ -85,6 +85,29 @@ test('handoff binds capability to exact source object', async () => {
   assert.equal(result.authority, 'gitflare-r2');
   assert.equal(result.artifacts.length, 5);
   assert.ok(result.uploadToken.startsWith('v1.'));
+});
+
+test('capability supports the full repo-name contract including dots', async () => {
+  const bucket = new Bucket();
+  const e = env(bucket);
+  const result = await handoff(e, 'firecrab.release');
+  const upload = await handleEvidenceUpload(
+    new Request(`${result.uploadBaseUrl}/result`, {
+      method: 'PUT',
+      headers: {
+        authorization: `Bearer ${result.uploadToken}`,
+        'content-type': 'application/json',
+        'content-length': '2',
+        'x-gitflare-sha256': DIGEST,
+      },
+      body: 'ok',
+    }),
+    e,
+    result.runId,
+    'result',
+  );
+  assert.equal(upload.status, 201);
+  assert.equal(bucket.objects.get(`runs/${result.runId}/result`)?.customMetadata?.repo, 'firecrab.release');
 });
 
 test('one artifact slot seals after first content claim', async () => {
