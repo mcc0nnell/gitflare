@@ -4,6 +4,8 @@ import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import type { Bindings } from './env';
 
 const GIT_OBJECT_ID = /^[a-f0-9]{40}([a-f0-9]{24})?$/i;
+const PREFLIGHT_STEP_TIMEOUT_MS = 31 * 60 * 1000;
+const PREFLIGHT_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 
 export class CI extends CIWorkflow<CloudflareArtifacts, Bindings> {
   protected async pipeline(
@@ -35,6 +37,10 @@ export class CI extends CIWorkflow<CloudflareArtifacts, Bindings> {
         name: 'release-compliance-preflight',
         command: 'bash scripts/gitflare-release-compliance.sh',
         env: { GITFLARE_EXPECTED_SHA: sha },
+        config: {
+          timeout: PREFLIGHT_STEP_TIMEOUT_MS,
+          commandTimeoutMs: PREFLIGHT_COMMAND_TIMEOUT_MS,
+        },
       });
     }
   }
