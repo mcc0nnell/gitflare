@@ -94,8 +94,6 @@ async function deterministicRequestId(job: NativeDispatchJob): Promise<string> {
     new TextEncoder().encode(subject),
   ));
   const bytes = digest.slice(0, 16);
-  // Deterministic RFC 4122-shaped UUID. Version 5 bits communicate that this
-  // is name-derived; SHA-256 is used as the digest rather than SHA-1.
   bytes[6] = (bytes[6] & 0x0f) | 0x50;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -141,11 +139,6 @@ function requireAdmittedJob(
   return job;
 }
 
-/**
- * Translate only the externally-mandated native cells into TalkPipe semantic
- * execution envelopes. We intentionally do not shell-parse subject-authored
- * command strings: argv is reconstructed from the external policy itself.
- */
 export function nativeDispatchJobs(
   admission: AssuranceAdmission,
   rawSource: AssuranceSourceIdentity,
@@ -279,6 +272,7 @@ export async function dispatchNativeJob(
         label: job.label,
         argv: job.argv,
         requirements: job.requirements,
+        evidencePath: job.evidence,
         source: job.source,
       }),
     },
@@ -289,6 +283,9 @@ export async function dispatchNativeJob(
   }
   if (body.architecture !== job.architecture) {
     throw new Error(`SCUMM Shell changed architecture for ${job.jobId}`);
+  }
+  if (body.evidencePath !== job.evidence) {
+    throw new Error(`SCUMM Shell changed evidencePath for ${job.jobId}`);
   }
   const source = record(body.source, `SCUMM Shell trigger source for ${job.jobId}`);
   for (const [key, value] of Object.entries(job.source)) {
@@ -324,6 +321,60 @@ export async function readNativeJobStatus(
   return body;
 }
 
+function validateEvidenceIdentity(job: DispatchedNativeJob, value: unknown): JsonRecord {
+  const evidence = record(value, `native evidence for ${job.jobId}`);
+  if (evidence.schemaVersion !== 1 || evidence.profile !== 'firecrab-release-assurance-v1') {
+    throw new Error(`native evidence schema/profile mismatch for ${job.jobId}`);
+  }
+  if (!['PASS', 'FAIL', 'BLOCKED'].includes(String(evidence.verdict ?? ''))) {
+    throw new Error(`native evidence verdict is invalid for ${job.jobId}`);
+  }
+  const subject = record(evidence.subject, `native evidence subject for ${job.jobId}`);
+  if (subject.sha !== job.source.sha || subject.architecture !== job.architecture) {
+    throw new Error(`native evidence changed source SHA/architecture for ${job.jobId}`);
+  }
+  if (job.jobId.startsWith('m2image-source:')) {
+    const [, alias] = job.jobId.split(':');
+    if (evidence.stage !== 'm2image-source-assurance' || subject.alias !== alias) {
+      throw new Error(`native M2Image evidence subject mismatch for ${job.jobId}`);
+    }
+  } else if (job.jobId.startsWith('host-release:')) {
+    const target = job.jobId.slice('host-release:'.length);
+    if (evidence.stage !== 'host-release-assurance' || subject.target !== target) {
+      throw new Error(`native host evidence subject mismatch for ${job.jobId}`);
+    }
+  } else {
+    throw new Error(`unknown native assurance job id: ${job.jobId}`);
+  }
+  return evidence;
+}
+
+export function extractNativeEvidence(job: DispatchedNativeJob, log: JsonRecord): JsonRecord {
+  if (log.consoleTruncated === true) {
+    throw new Error(`native assurance console was truncated for ${job.jobId}`);
+  }
+  const console = log.console;
+  if (typeof console !== 'string') throw new Error(`native assurance console is missing for ${job.jobId}`);
+  const begin = `SCUMM_ASSURANCE_EVIDENCE_BEGIN ${job.evidence}\n`;
+  const end = `\nSCUMM_ASSURANCE_EVIDENCE_END ${job.evidence}`;
+  const missing = `SCUMM_ASSURANCE_EVIDENCE_MISSING ${job.evidence}`;
+  const beginAt = console.lastIndexOf(begin);
+  const missingAt = console.lastIndexOf(missing);
+  if (missingAt > beginAt) throw new Error(`native assurance evidence is missing for ${job.jobId}`);
+  if (beginAt < 0) throw new Error(`native assurance evidence marker is missing for ${job.jobId}`);
+  const payloadStart = beginAt + begin.length;
+  const endAt = console.indexOf(end, payloadStart);
+  if (endAt < 0) throw new Error(`native assurance evidence end marker is missing for ${job.jobId}`);
+  const text = console.slice(payloadStart, endAt);
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error(`native assurance evidence is invalid JSON for ${job.jobId}`);
+  }
+  return validateEvidenceIdentity(job, value);
+}
+
 export async function readNativeJobLog(
   shell: ShellService,
   job: DispatchedNativeJob,
@@ -336,7 +387,7 @@ export async function readNativeJobLog(
   if (body.architecture !== job.architecture || body.buildId !== job.buildId) {
     throw new Error(`SCUMM Shell returned mismatched log identity for ${job.jobId}`);
   }
-  return body;
+  return { ...body, assuranceEvidence: extractNativeEvidence(job, body) };
 }
 
 export function nativeStatusTerminal(status: JsonRecord): boolean {
