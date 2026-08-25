@@ -10,6 +10,12 @@
       "namespace": "gitflare"
     }
   ],
+  "services": [
+    {
+      "binding": "SCUMM_SHELL",
+      "service": "scumm-shell-runtime"
+    }
+  ],
   "containers": [
     {
       "class_name": "CiSandbox",
