@@ -130,11 +130,18 @@ async function verifyCapability(
   runId: string,
   token: string,
 ): Promise<CapabilityClaims | null> {
-  const [version, rawExpiry, repo, sha, signature, ...extra] = token.split('.');
+  // Repository names may themselves contain dots. Parse the fixed suffix
+  // (SHA + HMAC) from the right and rejoin the repository field in between.
+  const parts = token.split('.');
+  if (parts.length < 5) return null;
+  const version = parts.shift();
+  const rawExpiry = parts.shift();
+  const signature = parts.pop();
+  const sha = parts.pop();
+  const repo = parts.join('.');
   if (
     version !== 'v1'
-    || extra.length
-    || !REPO_NAME.test(repo ?? '')
+    || !REPO_NAME.test(repo)
     || !GIT_SHA1.test(sha ?? '')
     || !/^[0-9a-f]{64}$/i.test(signature ?? '')
   ) {
@@ -149,9 +156,9 @@ async function verifyCapability(
     'HMAC',
     key,
     fromHex(signature!),
-    new TextEncoder().encode(capabilityInput(runId, repo!, sha!, expiresAt)),
+    new TextEncoder().encode(capabilityInput(runId, repo, sha!, expiresAt)),
   );
-  return valid ? { repo: repo!, sha: sha!.toLowerCase(), expiresAt } : null;
+  return valid ? { repo, sha: sha!.toLowerCase(), expiresAt } : null;
 }
 
 export async function handleEvidenceHandoff(
