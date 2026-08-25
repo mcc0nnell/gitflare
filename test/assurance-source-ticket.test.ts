@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   handleAssuranceSourceTicket,
+  sourcePlaneStatus,
   type AssuranceEnv,
 } from '../src/assurance-entry';
 
@@ -23,6 +24,7 @@ function request(body: Record<string, unknown>, auth = 'admin-secret'): Request 
 function env(options: { commitPresent?: boolean; remoteBase?: string } = {}): AssuranceEnv {
   return {
     GITFLARE_ADMIN_TOKEN: 'admin-secret',
+    GITFLARE_SOURCE_PLANE_MODE: 'cloudflare-artifacts',
     GITFLARE_ARTIFACTS_REMOTE_BASE: options.remoteBase ?? REMOTE_BASE,
     ARTIFACTS: {
       async get(name: string) {
@@ -45,6 +47,47 @@ function env(options: { commitPresent?: boolean; remoteBase?: string } = {}): As
     },
   };
 }
+
+test('pre-entitlement Gitflare is healthy but canonical source is explicitly unavailable', () => {
+  const status = sourcePlaneStatus({ GITFLARE_ADMIN_TOKEN: 'admin-secret' });
+  assert.equal(status.available, false);
+  assert.equal(status.canonical, false);
+  assert.equal(status.mode, 'unavailable');
+  assert.equal(status.bindingPresent, false);
+  assert.equal(status.reason, 'cloudflare-artifacts-access-unavailable');
+});
+
+test('pre-entitlement source ticket returns typed BLOCKED without touching Artifacts', async () => {
+  const response = await handleAssuranceSourceTicket(
+    request({ sha: SHA }),
+    {
+      GITFLARE_ADMIN_TOKEN: 'admin-secret',
+      GITFLARE_SOURCE_PLANE_MODE: 'unavailable',
+    },
+    'firecrab',
+  );
+  assert.equal(response.status, 503);
+  const body = await response.json() as Record<string, any>;
+  assert.equal(body.verdict, 'BLOCKED');
+  assert.equal(body.code, 'SOURCE_PLANE_UNAVAILABLE');
+  assert.equal(body.reason, 'cloudflare-artifacts-access-unavailable');
+  assert.equal(body.sourcePlane.available, false);
+});
+
+test('enabled mode still blocks when the Artifacts binding is absent', async () => {
+  const response = await handleAssuranceSourceTicket(
+    request({ sha: SHA }),
+    {
+      GITFLARE_ADMIN_TOKEN: 'admin-secret',
+      GITFLARE_SOURCE_PLANE_MODE: 'cloudflare-artifacts',
+      GITFLARE_ARTIFACTS_REMOTE_BASE: REMOTE_BASE,
+    },
+    'firecrab',
+  );
+  assert.equal(response.status, 503);
+  const body = await response.json() as Record<string, any>;
+  assert.equal(body.reason, 'cloudflare-artifacts-binding-unavailable');
+});
 
 test('source ticket proves canonical commit before minting a read credential', async () => {
   const response = await handleAssuranceSourceTicket(request({ sha: SHA, ttl: 300 }), env(), 'firecrab');
@@ -74,6 +117,8 @@ test('source ticket fails closed when the canonical Artifacts remote is not conf
     'firecrab',
   );
   assert.equal(response.status, 503);
+  const body = await response.json() as Record<string, unknown>;
+  assert.equal(body.reason, 'cloudflare-artifacts-remote-unconfigured');
 });
 
 test('source ticket requires Gitflare authentication', async () => {
