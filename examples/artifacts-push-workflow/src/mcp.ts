@@ -6,11 +6,13 @@ import {
   originValidationResponse,
 } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { admitFireCrabAssurancePlan } from '../assurance-policy';
 import type { Bindings } from '../env';
 
 const NAMESPACE = 'gitflare';
 const PROVIDER = 'cloudflare-artifacts';
 const MAX_ASSURANCE_PLAN_BYTES = 256 * 1024;
+const MAX_ASSURANCE_ADMISSION_BYTES = 64 * 1024;
 
 const shaSchema = z
   .string()
@@ -42,11 +44,18 @@ function failure(error: unknown) {
   };
 }
 
-function assurancePlanKey(repo: string, sha: string) {
+function assuranceAdmissionKey(repo: string, sha: string) {
   if (!/^[A-Za-z0-9._-]{1,96}$/.test(repo)) {
     throw new Error(`invalid assurance repository name: ${repo}`);
   }
-  return `assurance-plans/${repo.toLowerCase()}/${sha.toLowerCase()}.json`;
+  return `assurance-admissions/${repo.toLowerCase()}/${sha.toLowerCase()}.json`;
+}
+
+function record(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label} is not a JSON object`);
+  }
+  return value as Record<string, unknown>;
 }
 
 async function authorized(request: Request, env: Bindings): Promise<boolean> {
@@ -116,6 +125,54 @@ function slugify(value: string) {
     .slice(0, 48);
 }
 
+async function readAdmittedAssurancePlan(env: Bindings, repo: string, sha: string) {
+  const admissionObject = await env.BACKUP_BUCKET.get(assuranceAdmissionKey(repo, sha));
+  if (admissionObject === null) return null;
+  if (admissionObject.size > MAX_ASSURANCE_ADMISSION_BYTES) {
+    throw new Error('persisted assurance admission exceeds maximum size');
+  }
+
+  const admission = record(JSON.parse(await admissionObject.text()), 'persisted assurance admission');
+  const policy = record(admission.policy, 'persisted assurance policy');
+  if (
+    admission.schemaVersion !== 1
+    || admission.repo !== repo
+    || admission.sha !== sha
+    || typeof admission.planKey !== 'string'
+    || typeof admission.planDigest !== 'string'
+    || !/^sha256:[a-f0-9]{64}$/.test(admission.planDigest)
+    || typeof policy.id !== 'string'
+    || typeof policy.digest !== 'string'
+    || !/^sha256:[a-f0-9]{64}$/.test(policy.digest)
+  ) {
+    throw new Error('persisted assurance admission is invalid');
+  }
+  const expectedPrefix = `assurance-plans/${repo.toLowerCase()}/${sha.toLowerCase()}/`;
+  if (!admission.planKey.startsWith(expectedPrefix)) {
+    throw new Error('persisted assurance admission points outside the admitted subject namespace');
+  }
+
+  const planObject = await env.BACKUP_BUCKET.get(admission.planKey);
+  if (planObject === null) throw new Error('admitted assurance plan object is missing');
+  if (planObject.size > MAX_ASSURANCE_PLAN_BYTES) {
+    throw new Error('persisted assurance plan exceeds maximum size');
+  }
+  const planText = await planObject.text();
+
+  // Re-run the independent minimum policy on readback. This verifies both the
+  // content digest and that the currently served control plane still agrees
+  // with the policy identity/digest that admitted this source object.
+  const admitted = await admitFireCrabAssurancePlan(planText, sha);
+  if (
+    admitted.planDigest !== admission.planDigest
+    || admitted.policyId !== policy.id
+    || admitted.policyDigest !== policy.digest
+  ) {
+    throw new Error('persisted assurance admission failed digest/policy verification');
+  }
+  return { admission, plan: admitted.plan };
+}
+
 function createCiMcpServer(env: Bindings) {
   const server = new McpServer({ name: 'gitflare-ci', version: '0.1.0' });
 
@@ -179,15 +236,15 @@ function createCiMcpServer(env: Bindings) {
   server.registerTool(
     'ci_assurance_plan',
     {
-      title: 'Get assurance plan',
+      title: 'Get admitted assurance plan',
       description:
-        'Read the project-emitted assurance work plan persisted after a successful source-bound preflight.',
+        'Read an externally policy-admitted, digest-verified assurance plan for a successful source-bound preflight.',
       inputSchema: z.object({
         repo: repoSchema.describe('Artifacts repository name'),
         sha: shaSchema.describe('Git commit object id'),
       }),
       annotations: {
-        title: 'Get assurance plan',
+        title: 'Get admitted assurance plan',
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
@@ -195,27 +252,9 @@ function createCiMcpServer(env: Bindings) {
     },
     async ({ repo, sha }) => {
       try {
-        const key = assurancePlanKey(repo, sha);
-        const object = await env.BACKUP_BUCKET.get(key);
-        if (object === null) {
-          return result({ found: false, repo, sha });
-        }
-        if (object.size > MAX_ASSURANCE_PLAN_BYTES) {
-          throw new Error('persisted assurance plan exceeds maximum size');
-        }
-        const text = await object.text();
-        const value: unknown = JSON.parse(text);
-        if (typeof value !== 'object' || value === null) {
-          throw new Error('persisted assurance plan is not a JSON object');
-        }
-        const plan = value as Record<string, unknown>;
-        if (plan.schemaVersion !== 1 || plan.sha !== sha) {
-          throw new Error('persisted assurance plan subject does not match request');
-        }
-        if (!Array.isArray(plan.jobs) || plan.jobs.length === 0 || plan.jobCount !== plan.jobs.length) {
-          throw new Error('persisted assurance plan has invalid job coverage');
-        }
-        return result({ found: true, repo, sha, plan });
+        const admitted = await readAdmittedAssurancePlan(env, repo, sha);
+        if (admitted === null) return result({ found: false, repo, sha });
+        return result({ found: true, repo, sha, ...admitted });
       } catch (error) {
         return failure(error);
       }
