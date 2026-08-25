@@ -6,6 +6,7 @@
   "scripts": {
     "build": "wrangler deploy --dry-run --containers-rollout=none",
     "dev": "wrangler dev",
+    "test": "node --test assurance-policy.test.ts",
     "typecheck": "wrangler types --include-runtime false --strict-vars false --env-interface CloudflareBindings && tsc --noEmit",
     "cf-typegen": "wrangler types --include-runtime false --strict-vars false --env-interface CloudflareBindings",
     "deploy": "wrangler deploy"
