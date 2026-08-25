@@ -1,6 +1,7 @@
 import { CIWorkflow } from '@cloudflare/ci';
 import type { CiContext, CiParams, CloudflareArtifacts } from '@cloudflare/ci';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
+import { admitFireCrabAssurancePlan } from './assurance-policy';
 import type { Bindings } from './env';
 
 const GIT_OBJECT_ID = /^[a-f0-9]{40}([a-f0-9]{24})?$/i;
@@ -9,11 +10,21 @@ const PREFLIGHT_STEP_TIMEOUT_MS = 31 * 60 * 1000;
 const PREFLIGHT_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_ASSURANCE_PLAN_BYTES = 256 * 1024;
 
-function assurancePlanKey(repo: string, sha: string) {
+function normalizedRepo(repo: string): string {
   if (!ASSURANCE_REPO.test(repo)) {
     throw new Error(`invalid assurance repository name: ${repo}`);
   }
-  return `assurance-plans/${repo.toLowerCase()}/${sha.toLowerCase()}.json`;
+  return repo.toLowerCase();
+}
+
+function assuranceAdmissionKey(repo: string, sha: string) {
+  return `assurance-admissions/${normalizedRepo(repo)}/${sha.toLowerCase()}.json`;
+}
+
+function assurancePlanObjectKey(repo: string, sha: string, planDigest: string) {
+  const digest = planDigest.replace(/^sha256:/, '');
+  if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error('invalid assurance plan digest');
+  return `assurance-plans/${normalizedRepo(repo)}/${sha.toLowerCase()}/${digest}.json`;
 }
 
 async function readBoundedLog(
@@ -54,22 +65,66 @@ async function readBoundedLog(
   return new TextDecoder().decode(bytes);
 }
 
-function validateAssurancePlan(text: string, sha: string) {
-  const value: unknown = JSON.parse(text);
-  if (typeof value !== 'object' || value === null) {
-    throw new Error('assurance plan is not a JSON object');
+async function persistAdmittedPlan(env: Bindings, repo: string, sha: string, planText: string) {
+  const admitted = await admitFireCrabAssurancePlan(planText, sha);
+  const planKey = assurancePlanObjectKey(repo, sha, admitted.planDigest);
+  const pointerKey = assuranceAdmissionKey(repo, sha);
+  const envelope = {
+    schemaVersion: 1,
+    repo,
+    sha,
+    planDigest: admitted.planDigest,
+    planKey,
+    policy: {
+      id: admitted.policyId,
+      digest: admitted.policyDigest,
+    },
+    mandatoryJobIds: admitted.mandatoryJobIds,
+  };
+  const envelopeText = JSON.stringify(envelope, null, 2) + '\n';
+
+  // The plan object is content-addressed. Re-observing the same source and plan
+  // is harmless; a different plan necessarily maps to a different object key.
+  const existingPlan = await env.BACKUP_BUCKET.get(planKey);
+  if (existingPlan !== null) {
+    if (existingPlan.size > MAX_ASSURANCE_PLAN_BYTES || (await existingPlan.text()) !== planText) {
+      throw new Error('content-addressed assurance plan collision');
+    }
+  } else {
+    await env.BACKUP_BUCKET.put(planKey, planText, {
+      httpMetadata: { contentType: 'application/json' },
+      customMetadata: {
+        repo,
+        sha,
+        planDigest: admitted.planDigest,
+        policyId: admitted.policyId,
+        policyDigest: admitted.policyDigest,
+      },
+    });
   }
-  const plan = value as Record<string, unknown>;
-  if (plan.schemaVersion !== 1 || plan.sha !== sha) {
-    throw new Error('assurance plan subject does not match the CI source revision');
+
+  // First admission for a source object wins. A rerun may confirm the exact
+  // same plan/policy admission but can never replace it with weaker coverage.
+  const existingAdmission = await env.BACKUP_BUCKET.get(pointerKey);
+  if (existingAdmission !== null) {
+    const existingText = await existingAdmission.text();
+    if (existingText !== envelopeText) {
+      throw new Error('assurance admission collision: this Git object already has a different admitted plan');
+    }
+  } else {
+    await env.BACKUP_BUCKET.put(pointerKey, envelopeText, {
+      httpMetadata: { contentType: 'application/json' },
+      customMetadata: {
+        repo,
+        sha,
+        planDigest: admitted.planDigest,
+        policyId: admitted.policyId,
+        policyDigest: admitted.policyDigest,
+      },
+    });
   }
-  if (!Array.isArray(plan.jobs) || plan.jobs.length === 0) {
-    throw new Error('assurance plan contains no jobs');
-  }
-  if (plan.jobCount !== plan.jobs.length) {
-    throw new Error('assurance plan jobCount does not match jobs');
-  }
-  return text;
+
+  return envelope;
 }
 
 export class CI extends CIWorkflow<CloudflareArtifacts, Bindings> {
@@ -93,10 +148,6 @@ export class CI extends CIWorkflow<CloudflareArtifacts, Bindings> {
       env: { GITFLARE_EXPECTED_SHA: sha },
     });
 
-    // Project policy lives with the project. Gitflare only chooses the profile;
-    // FireCrab owns and versions the release-compliance contract that is run.
-    // Chaining from verify-source reuses only this run's clean snapshot; there
-    // is deliberately no cross-run dependency cache for the preflight.
     if (repo === 'firecrab') {
       const preflight = await source.runner({
         name: 'release-compliance-preflight',
@@ -108,22 +159,16 @@ export class CI extends CIWorkflow<CloudflareArtifacts, Bindings> {
         },
       });
 
-      // Read only the project-emitted work plan from the successful preflight
-      // snapshot. Gitflare persists it by source SHA so TalkPipe can consume the
-      // matrix without Gitflare learning FireCrab-specific assurance policy.
+      // FireCrab may describe richer project-specific assurance, but admission
+      // is controlled here. The subject cannot delete or weaken the externally
+      // anchored minimum matrix and still obtain a persisted work plan.
       const planOutput = await preflight.runner({
         name: 'read-assurance-plan',
         command: 'cat dist/gitflare-receipts/assurance-plan.json',
         env: { GITFLARE_EXPECTED_SHA: sha },
       });
-      const planText = validateAssurancePlan(
-        await readBoundedLog(planOutput.logs.stdout),
-        sha,
-      );
-      await this.env.BACKUP_BUCKET.put(assurancePlanKey(repo, sha), planText, {
-        httpMetadata: { contentType: 'application/json' },
-        customMetadata: { repo, sha },
-      });
+      const planText = await readBoundedLog(planOutput.logs.stdout);
+      await persistAdmittedPlan(this.env, repo, sha, planText);
     }
   }
 }
