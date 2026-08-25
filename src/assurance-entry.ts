@@ -1,6 +1,7 @@
 import baseHandler from './index';
 
 type TokenScope = 'read' | 'write';
+type SourcePlaneMode = 'unavailable' | 'cloudflare-artifacts';
 
 interface ArtifactTokenResult {
   plaintext: string;
@@ -17,8 +18,14 @@ interface ArtifactsBinding {
 }
 
 export interface AssuranceEnv {
-  ARTIFACTS: ArtifactsBinding;
-  GITFLARE_ADMIN_TOKEN: string;
+  /** Present only after the account has Cloudflare Artifacts access. */
+  ARTIFACTS?: ArtifactsBinding;
+  GITFLARE_ADMIN_TOKEN?: string;
+  /**
+   * Default deployments deliberately set this to `unavailable` so Gitflare can
+   * deploy before the closed-beta Artifacts entitlement exists.
+   */
+  GITFLARE_SOURCE_PLANE_MODE?: SourcePlaneMode;
   /**
    * Example: https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/gitflare
    *
@@ -31,6 +38,21 @@ export interface AssuranceEnv {
 interface SourceTicketBody {
   sha?: unknown;
   ttl?: unknown;
+}
+
+export interface SourcePlaneStatus {
+  schemaVersion: 1;
+  authority: 'gitflare';
+  requestedProvider: 'cloudflare-artifacts';
+  canonical: boolean;
+  available: boolean;
+  mode: SourcePlaneMode;
+  bindingPresent: boolean;
+  remoteConfigured: boolean;
+  reason: null
+    | 'cloudflare-artifacts-access-unavailable'
+    | 'cloudflare-artifacts-binding-unavailable'
+    | 'cloudflare-artifacts-remote-unconfigured';
 }
 
 const SHA1 = /^[0-9a-f]{40}$/i;
@@ -51,6 +73,54 @@ function json(body: unknown, status = 200): Response {
 function authorized(request: Request, env: AssuranceEnv): boolean {
   return Boolean(env.GITFLARE_ADMIN_TOKEN)
     && request.headers.get('authorization') === `Bearer ${env.GITFLARE_ADMIN_TOKEN}`;
+}
+
+function sourcePlaneMode(env: AssuranceEnv): SourcePlaneMode {
+  return env.GITFLARE_SOURCE_PLANE_MODE === 'cloudflare-artifacts'
+    ? 'cloudflare-artifacts'
+    : 'unavailable';
+}
+
+export function sourcePlaneStatus(env: AssuranceEnv): SourcePlaneStatus {
+  const mode = sourcePlaneMode(env);
+  const bindingPresent = Boolean(env.ARTIFACTS);
+  const remoteBase = env.GITFLARE_ARTIFACTS_REMOTE_BASE?.replace(/\/+$/, '') ?? '';
+  const remoteConfigured = REMOTE_BASE.test(remoteBase);
+
+  let reason: SourcePlaneStatus['reason'] = null;
+  if (mode !== 'cloudflare-artifacts') {
+    reason = 'cloudflare-artifacts-access-unavailable';
+  } else if (!bindingPresent) {
+    reason = 'cloudflare-artifacts-binding-unavailable';
+  } else if (!remoteConfigured) {
+    reason = 'cloudflare-artifacts-remote-unconfigured';
+  }
+
+  const available = reason === null;
+  return {
+    schemaVersion: 1,
+    authority: 'gitflare',
+    requestedProvider: 'cloudflare-artifacts',
+    canonical: available,
+    available,
+    mode,
+    bindingPresent,
+    remoteConfigured,
+    reason,
+  };
+}
+
+function sourcePlaneBlocked(env: AssuranceEnv): Response {
+  const sourcePlane = sourcePlaneStatus(env);
+  return json({
+    schemaVersion: 1,
+    verdict: 'BLOCKED',
+    error: 'canonical source plane is unavailable',
+    code: 'SOURCE_PLANE_UNAVAILABLE',
+    reason: sourcePlane.reason,
+    retryable: true,
+    sourcePlane,
+  }, 503);
 }
 
 function ttlSeconds(value: unknown): number {
@@ -79,6 +149,9 @@ export async function handleAssuranceSourceTicket(
   if (!authorized(request, env)) return json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
   if (!REPO.test(repoName)) return json({ error: 'invalid repository name', code: 'INVALID_REPOSITORY' }, 400);
 
+  const sourcePlane = sourcePlaneStatus(env);
+  if (!sourcePlane.available || !env.ARTIFACTS) return sourcePlaneBlocked(env);
+
   let body: SourceTicketBody;
   try {
     body = await request.json() as SourceTicketBody;
@@ -101,8 +174,7 @@ export async function handleAssuranceSourceTicket(
     remoteBase = configuredRemoteBase(env);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const status = message.includes('not configured') ? 503 : 400;
-    return json({ error: message, code: status === 503 ? 'SOURCE_PLANE_NOT_CONFIGURED' : 'INVALID_ARGUMENT' }, status);
+    return json({ error: message, code: 'INVALID_ARGUMENT' }, 400);
   }
 
   let repo: ArtifactRepoHandle;
@@ -149,11 +221,34 @@ export async function handleAssuranceSourceTicket(
 export default {
   async fetch(request: Request, env: AssuranceEnv): Promise<Response> {
     const url = new URL(request.url);
+
+    if (request.method === 'GET' && url.pathname === '/v1/source-plane') {
+      return json(sourcePlaneStatus(env));
+    }
+
+    if (request.method === 'GET' && url.pathname === '/healthz') {
+      const sourcePlane = sourcePlaneStatus(env);
+      return json({
+        ok: true,
+        service: 'gitflare-api',
+        authority: 'gitflare',
+        sourcePlane,
+      });
+    }
+
     const match = /^\/repos\/([^/]+)\/assurance\/source-ticket\/?$/.exec(url.pathname);
     if (match) {
       if (request.method !== 'POST') return json({ error: 'method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
       return handleAssuranceSourceTicket(request, env, decodeURIComponent(match[1]));
     }
+
+    // The pre-entitlement deployment is intentionally useful: health and
+    // assurance status work, while every Artifacts-backed repo operation fails
+    // closed instead of crashing on an absent Worker binding.
+    if (!env.ARTIFACTS && url.pathname.startsWith('/repos')) {
+      return sourcePlaneBlocked(env);
+    }
+
     return baseHandler.fetch(request, env as never);
   },
 };
