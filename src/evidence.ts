@@ -1,3 +1,4 @@
+import { internalControlAuthorized } from './control-auth.js';
 import type { HandoffArtifactsBinding } from './execution-handoff.js';
 
 export const HOST_EVIDENCE_ARTIFACTS = [
@@ -38,8 +39,7 @@ export interface EvidenceBucket {
 export interface EvidenceEnv {
   ARTIFACTS: HandoffArtifactsBinding;
   EVIDENCE: EvidenceBucket;
-  GITFLARE_ADMIN_TOKEN: string;
-  GITFLARE_EVIDENCE_HMAC_KEY: string;
+  GITFLARE_EVIDENCE_HMAC_KEY?: string;
 }
 
 const GIT_SHA1 = /^[0-9a-f]{40}$/i;
@@ -48,6 +48,7 @@ const REPO_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EVIDENCE_TTL_SECONDS = 2 * 60 * 60;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
+const PUBLIC_EVIDENCE_ORIGIN = 'https://evidence.scumm.app';
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
@@ -57,11 +58,6 @@ function json(body: unknown, status: number): Response {
       'cache-control': 'no-store',
     },
   });
-}
-
-function adminAuthorized(request: Request, env: EvidenceEnv): boolean {
-  return Boolean(env.GITFLARE_ADMIN_TOKEN)
-    && request.headers.get('authorization') === `Bearer ${env.GITFLARE_ADMIN_TOKEN}`;
 }
 
 function artifactId(value: string): EvidenceArtifact | null {
@@ -86,8 +82,8 @@ function fromHex(value: string): Uint8Array {
   return out;
 }
 
-async function hmacKey(secret: string): Promise<CryptoKey> {
-  if (secret.length < 32) {
+async function hmacKey(secret: string | undefined): Promise<CryptoKey> {
+  if (!secret || secret.length < 32) {
     throw new Error('GITFLARE_EVIDENCE_HMAC_KEY must be at least 32 characters');
   }
   return crypto.subtle.importKey(
@@ -130,8 +126,6 @@ async function verifyCapability(
   runId: string,
   token: string,
 ): Promise<CapabilityClaims | null> {
-  // Repository names may themselves contain dots. Parse the fixed suffix
-  // (SHA + HMAC) from the right and rejoin the repository field in between.
   const parts = token.split('.');
   if (parts.length < 5) return null;
   const version = parts.shift();
@@ -166,8 +160,8 @@ export async function handleEvidenceHandoff(
   env: EvidenceEnv,
   rawRepo: string,
 ): Promise<Response> {
-  if (!adminAuthorized(request, env)) {
-    return json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
+  if (!internalControlAuthorized(request)) {
+    return json({ error: 'Control plane only', code: 'CONTROL_PLANE_ONLY' }, 403);
   }
   let repo: string;
   try {
@@ -212,14 +206,13 @@ export async function handleEvidenceHandoff(
   } catch {
     return json({ error: 'evidence capability is not configured', code: 'EVIDENCE_UNCONFIGURED' }, 503);
   }
-  const origin = new URL(request.url).origin;
   return json({
     schemaVersion: 1,
     authority: 'gitflare-r2',
     runId,
     repo,
     sha,
-    uploadBaseUrl: `${origin}/evidence/uploads/${runId}`,
+    uploadBaseUrl: `${PUBLIC_EVIDENCE_ORIGIN}/evidence/uploads/${runId}`,
     uploadToken,
     expiresAt,
     artifacts: HOST_EVIDENCE_ARTIFACTS,
@@ -298,8 +291,8 @@ export async function handleEvidenceManifest(
   env: EvidenceEnv,
   runId: string,
 ): Promise<Response> {
-  if (!adminAuthorized(request, env)) {
-    return json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
+  if (!internalControlAuthorized(request)) {
+    return json({ error: 'Control plane only', code: 'CONTROL_PLANE_ONLY' }, 403);
   }
   if (!RUN_ID.test(runId)) {
     return json({ error: 'Invalid run id', code: 'INVALID_RUN_ID' }, 400);
@@ -326,8 +319,8 @@ export async function handleEvidenceDownload(
   runId: string,
   rawArtifact: string,
 ): Promise<Response> {
-  if (!adminAuthorized(request, env)) {
-    return json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
+  if (!internalControlAuthorized(request)) {
+    return json({ error: 'Control plane only', code: 'CONTROL_PLANE_ONLY' }, 403);
   }
   if (!RUN_ID.test(runId)) {
     return json({ error: 'Invalid run id', code: 'INVALID_RUN_ID' }, 400);
