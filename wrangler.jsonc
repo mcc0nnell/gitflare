@@ -10,6 +10,12 @@
       "head_sampling_rate": 1
     }
   },
+  "secrets": {
+    "required": [
+      "GITFLARE_ADMIN_TOKEN",
+      "GITFLARE_EVIDENCE_HMAC_KEY"
+    ]
+  },
   "artifacts": [
     {
       "binding": "ARTIFACTS",
