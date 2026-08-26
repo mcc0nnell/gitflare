@@ -7,13 +7,19 @@ import {
   handleEvidenceUpload,
   type EvidenceEnv,
 } from './evidence.js';
+import { handleSourceBootstrap, type SourceBootstrapEnv } from './source-bootstrap.js';
 
 type LegacyEnv = Parameters<typeof legacy.fetch>[1];
-type Env = LegacyEnv & HandoffEnv & EvidenceEnv;
+type Env = LegacyEnv & HandoffEnv & EvidenceEnv & SourceBootstrapEnv;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    const bootstrap = /^\/repos\/([^/]+)\/bootstrap$/.exec(url.pathname);
+    if (request.method === 'POST' && bootstrap) {
+      return handleSourceBootstrap(request, env, bootstrap[1]);
+    }
 
     const execution = /^\/repos\/([^/]+)\/execution-handoffs$/.exec(url.pathname);
     if (request.method === 'POST' && execution) {
