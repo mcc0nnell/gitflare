@@ -1,3 +1,4 @@
+import { internalControlAuthorized } from './control-auth.js';
 import { registeredSourceRemote, type SourceRegistryBucket } from './source-bootstrap.js';
 
 export interface ArtifactTokenResult {
@@ -17,7 +18,6 @@ export interface HandoffArtifactsBinding {
 export interface HandoffEnv {
   ARTIFACTS: HandoffArtifactsBinding;
   EVIDENCE: SourceRegistryBucket;
-  GITFLARE_ADMIN_TOKEN: string;
 }
 
 interface HandoffBody {
@@ -39,11 +39,6 @@ function json(body: unknown, status: number, requestId: string): Response {
   });
 }
 
-function authorized(request: Request, env: HandoffEnv): boolean {
-  return Boolean(env.GITFLARE_ADMIN_TOKEN)
-    && request.headers.get('authorization') === `Bearer ${env.GITFLARE_ADMIN_TOKEN}`;
-}
-
 function ttlSeconds(value: unknown): number {
   if (value === undefined || value === null) return 900;
   if (!Number.isSafeInteger(value)) throw new Error('ttl must be an integer');
@@ -58,8 +53,8 @@ export async function handleExecutionHandoff(
   rawRepo: string,
 ): Promise<Response> {
   const requestId = crypto.randomUUID();
-  if (!authorized(request, env)) {
-    return json({ error: 'Unauthorized', code: 'UNAUTHORIZED', requestId }, 401, requestId);
+  if (!internalControlAuthorized(request)) {
+    return json({ error: 'Control plane only', code: 'CONTROL_PLANE_ONLY', requestId }, 403, requestId);
   }
 
   let repo: string;
@@ -127,8 +122,6 @@ export async function handleExecutionHandoff(
     return json({ error: 'could not mint source credential', code: 'SOURCE_TOKEN_FAILED', requestId }, 502, requestId);
   }
 
-  // Never log or echo this object through a non-secret channel. It is a one-hop
-  // execution handoff and the credential is deliberately short lived + read-only.
   return json({
     schemaVersion: 1,
     authority: 'gitflare',
