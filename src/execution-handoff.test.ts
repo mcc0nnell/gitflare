@@ -20,7 +20,6 @@ function sourceRecord(repo = 'firecrab'): string {
 
 function env(events: string[], registered = true): HandoffEnv {
   return {
-    GITFLARE_ADMIN_TOKEN: 'admin',
     EVIDENCE: {
       async get(key: string) {
         events.push(`registry:${key}`);
@@ -50,13 +49,10 @@ function env(events: string[], registered = true): HandoffEnv {
   };
 }
 
-function request(body: unknown, token = 'admin'): Request {
-  return new Request('https://gitflare.example/repos/firecrab/execution-handoffs', {
+function request(body: unknown, host = 'gitflare.internal'): Request {
+  return new Request(`https://${host}/repos/firecrab/execution-handoffs`, {
     method: 'POST',
-    headers: {
-      authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
-    },
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
 }
@@ -96,9 +92,9 @@ test('unbootstrapped repo fails before Artifacts is touched', async () => {
   assert.deepEqual(events, ['registry:control/source-repos/firecrab.json']);
 });
 
-test('unauthorized caller fails before registry or Artifacts is touched', async () => {
+test('public caller fails before registry or Artifacts is touched', async () => {
   const events: string[] = [];
-  const response = await handleExecutionHandoff(request({ sha: SHA }, 'wrong'), env(events), 'firecrab');
-  assert.equal(response.status, 401);
+  const response = await handleExecutionHandoff(request({ sha: SHA }, 'evidence.scumm.app'), env(events), 'firecrab');
+  assert.equal(response.status, 403);
   assert.deepEqual(events, []);
 });
