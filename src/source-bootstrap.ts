@@ -1,3 +1,4 @@
+import { internalControlAuthorized } from './control-auth.js';
 import type { HandoffArtifactsBinding } from './execution-handoff.js';
 
 const REPO_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -37,7 +38,6 @@ export interface SourceRegistryBucket {
 export interface SourceBootstrapEnv {
   ARTIFACTS: SourceArtifactsBinding;
   EVIDENCE: SourceRegistryBucket;
-  GITFLARE_ADMIN_TOKEN: string;
 }
 
 export interface SourceRepoRecord {
@@ -59,11 +59,6 @@ function json(body: unknown, status: number): Response {
       'cache-control': 'no-store',
     },
   });
-}
-
-function authorized(request: Request, env: SourceBootstrapEnv): boolean {
-  return Boolean(env.GITFLARE_ADMIN_TOKEN)
-    && request.headers.get('authorization') === `Bearer ${env.GITFLARE_ADMIN_TOKEN}`;
 }
 
 function registryKey(repo: string): string {
@@ -132,8 +127,8 @@ export async function handleSourceBootstrap(
   env: SourceBootstrapEnv,
   rawRepo: string,
 ): Promise<Response> {
-  if (!authorized(request, env)) {
-    return json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
+  if (!internalControlAuthorized(request)) {
+    return json({ error: 'Control plane only', code: 'CONTROL_PLANE_ONLY' }, 403);
   }
 
   let repo: string;
@@ -215,7 +210,5 @@ export async function handleSourceBootstrap(
     return json({ error: 'could not persist source registry record', code: 'SOURCE_REGISTRY_FAILED' }, 502);
   }
 
-  // Artifacts import returns an initial token. It is intentionally discarded;
-  // execution receives fresh, short-lived repo-scoped read tokens instead.
   return json(record, 201);
 }
