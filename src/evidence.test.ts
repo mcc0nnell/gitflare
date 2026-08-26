@@ -60,18 +60,14 @@ function env(bucket = new Bucket()): EvidenceEnv {
       },
     },
     EVIDENCE: bucket,
-    GITFLARE_ADMIN_TOKEN: 'admin',
     GITFLARE_EVIDENCE_HMAC_KEY: '0123456789abcdef0123456789abcdef',
   };
 }
 
 async function handoff(e: EvidenceEnv, repo = 'firecrab'): Promise<any> {
-  const request = new Request(`https://gitflare.example/repos/${repo}/evidence-handoffs`, {
+  const request = new Request(`https://gitflare.internal/repos/${repo}/evidence-handoffs`, {
     method: 'POST',
-    headers: {
-      authorization: 'Bearer admin',
-      'content-type': 'application/json',
-    },
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ sha: SHA }),
   });
   const response = await handleEvidenceHandoff(request, e, repo);
@@ -79,12 +75,13 @@ async function handoff(e: EvidenceEnv, repo = 'firecrab'): Promise<any> {
   return response.json();
 }
 
-test('handoff binds capability to exact source object', async () => {
+test('handoff binds capability to exact source object and public evidence origin', async () => {
   const result = await handoff(env());
   assert.equal(result.sha, SHA);
   assert.equal(result.authority, 'gitflare-r2');
   assert.equal(result.artifacts.length, 5);
   assert.ok(result.uploadToken.startsWith('v1.'));
+  assert.equal(result.uploadBaseUrl, `https://evidence.scumm.app/evidence/uploads/${result.runId}`);
 });
 
 test('capability supports the full repo-name contract including dots', async () => {
@@ -136,7 +133,7 @@ test('one artifact slot seals after first content claim', async () => {
   assert.equal((await upload('b'.repeat(64), 'no')).status, 409);
 });
 
-test('manifest and download never expose upload capability', async () => {
+test('manifest and download are internal-only and never expose upload capability', async () => {
   const bucket = new Bucket();
   const e = env(bucket);
   const result = await handoff(e);
@@ -157,10 +154,15 @@ test('manifest and download never expose upload capability', async () => {
     'result',
   );
 
+  const denied = await handleEvidenceManifest(
+    new Request(`https://evidence.scumm.app/evidence/runs/${result.runId}`),
+    e,
+    result.runId,
+  );
+  assert.equal(denied.status, 403);
+
   const manifest = await handleEvidenceManifest(
-    new Request(`https://gitflare.example/evidence/runs/${result.runId}`, {
-      headers: { authorization: 'Bearer admin' },
-    }),
+    new Request(`https://gitflare.internal/evidence/runs/${result.runId}`),
     e,
     result.runId,
   );
@@ -169,9 +171,7 @@ test('manifest and download never expose upload capability', async () => {
   assert.equal(JSON.stringify(body).includes(result.uploadToken), false);
 
   const download = await handleEvidenceDownload(
-    new Request('https://gitflare.example/evidence', {
-      headers: { authorization: 'Bearer admin' },
-    }),
+    new Request('https://gitflare.internal/evidence'),
     e,
     result.runId,
     'result',
