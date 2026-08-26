@@ -2,20 +2,20 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "gitflare-api",
   "main": "src/router.ts",
-  "compatibility_date": "2026-08-23",
-  "workers_dev": true,
+  "compatibility_date": "2026-08-25",
+  "workers_dev": false,
   "observability": {
     "enabled": true,
     "logs": {
       "head_sampling_rate": 1
     }
   },
-  "secrets": {
-    "required": [
-      "GITFLARE_ADMIN_TOKEN",
-      "GITFLARE_EVIDENCE_HMAC_KEY"
-    ]
-  },
+  "routes": [
+    {
+      "pattern": "evidence.scumm.app",
+      "custom_domain": true
+    }
+  ],
   "artifacts": [
     {
       "binding": "ARTIFACTS",
