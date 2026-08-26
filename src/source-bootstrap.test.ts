@@ -25,7 +25,6 @@ class Registry implements SourceRegistryBucket {
 
 function env(events: string[], registry = new Registry()): SourceBootstrapEnv {
   return {
-    GITFLARE_ADMIN_TOKEN: 'admin',
     EVIDENCE: registry,
     ARTIFACTS: {
       async get() {
@@ -44,13 +43,10 @@ function env(events: string[], registry = new Registry()): SourceBootstrapEnv {
   };
 }
 
-function request(branch: string, token = 'admin'): Request {
-  return new Request('https://gitflare.example/repos/firecrab/bootstrap', {
+function request(branch: string, host = 'gitflare.internal'): Request {
+  return new Request(`https://${host}/repos/firecrab/bootstrap`, {
     method: 'POST',
-    headers: {
-      authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
-    },
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ branch }),
   });
 }
@@ -83,10 +79,10 @@ test('same branch is idempotent and a different branch fails closed', async () =
   assert.equal(events.length, 1);
 });
 
-test('rejects unauthorized or unsafe bootstrap requests before import', async () => {
+test('rejects public or unsafe bootstrap requests before import', async () => {
   const events: string[] = [];
   const e = env(events);
-  assert.equal((await handleSourceBootstrap(request('main', 'wrong'), e, 'firecrab')).status, 401);
+  assert.equal((await handleSourceBootstrap(request('main', 'evidence.scumm.app'), e, 'firecrab')).status, 403);
   assert.equal((await handleSourceBootstrap(request('../main'), e, 'firecrab')).status, 400);
   assert.equal((await handleSourceBootstrap(request('main'), e, 'bad/repo')).status, 400);
   assert.deepEqual(events, []);
