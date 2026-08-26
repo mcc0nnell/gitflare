@@ -12,9 +12,32 @@ import { handleSourceBootstrap, type SourceBootstrapEnv } from './source-bootstr
 type LegacyEnv = Parameters<typeof legacy.fetch>[1];
 type Env = LegacyEnv & HandoffEnv & EvidenceEnv & SourceBootstrapEnv;
 
+const INTERNAL_HOST = 'gitflare.internal';
+const PUBLIC_EVIDENCE_HOST = 'evidence.scumm.app';
+
+function notFound(): Response {
+  return new Response(JSON.stringify({ error: 'Not found' }), {
+    status: 404,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+    },
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.hostname === PUBLIC_EVIDENCE_HOST) {
+      const upload = /^\/evidence\/uploads\/([^/]+)\/([^/]+)$/.exec(url.pathname);
+      if (request.method === 'PUT' && upload) {
+        return handleEvidenceUpload(request, env, upload[1], upload[2]);
+      }
+      return notFound();
+    }
+
+    if (url.hostname !== INTERNAL_HOST) return notFound();
 
     const bootstrap = /^\/repos\/([^/]+)\/bootstrap$/.exec(url.pathname);
     if (request.method === 'POST' && bootstrap) {
@@ -29,11 +52,6 @@ export default {
     const evidenceHandoff = /^\/repos\/([^/]+)\/evidence-handoffs$/.exec(url.pathname);
     if (request.method === 'POST' && evidenceHandoff) {
       return handleEvidenceHandoff(request, env, evidenceHandoff[1]);
-    }
-
-    const upload = /^\/evidence\/uploads\/([^/]+)\/([^/]+)$/.exec(url.pathname);
-    if (request.method === 'PUT' && upload) {
-      return handleEvidenceUpload(request, env, upload[1], upload[2]);
     }
 
     const artifact = /^\/evidence\/runs\/([^/]+)\/([^/]+)$/.exec(url.pathname);
