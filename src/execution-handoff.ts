@@ -1,3 +1,5 @@
+import { registeredSourceRemote, type SourceRegistryBucket } from './source-bootstrap.js';
+
 export interface ArtifactTokenResult {
   plaintext: string;
   expiresAt?: string;
@@ -14,9 +16,8 @@ export interface HandoffArtifactsBinding {
 
 export interface HandoffEnv {
   ARTIFACTS: HandoffArtifactsBinding;
+  EVIDENCE: SourceRegistryBucket;
   GITFLARE_ADMIN_TOKEN: string;
-  /** e.g. https://<account>.artifacts.cloudflare.net/git/gitflare */
-  GITFLARE_ARTIFACTS_REMOTE_BASE?: string;
 }
 
 interface HandoffBody {
@@ -49,16 +50,6 @@ function ttlSeconds(value: unknown): number {
   const ttl = Number(value);
   if (ttl < 60 || ttl > 900) throw new Error('ttl must be between 60 and 900 seconds');
   return ttl;
-}
-
-function sourceRemote(base: string | undefined, repo: string): string {
-  if (!base) throw new Error('GITFLARE_ARTIFACTS_REMOTE_BASE is not configured');
-  const normalized = base.replace(/\/+$/, '');
-  const parsed = new URL(normalized);
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw new Error('GITFLARE_ARTIFACTS_REMOTE_BASE must be a credential-free HTTPS base');
-  }
-  return `${normalized}/${repo}.git`;
 }
 
 export async function handleExecutionHandoff(
@@ -99,14 +90,21 @@ export async function handleExecutionHandoff(
   }
 
   let ttl: number;
-  let remote: string;
   try {
     ttl = ttlSeconds(body.ttl);
-    remote = sourceRemote(env.GITFLARE_ARTIFACTS_REMOTE_BASE, repo);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'invalid handoff configuration';
-    const status = message.includes('REMOTE_BASE') ? 503 : 400;
-    return json({ error: message, code: status === 503 ? 'SOURCE_REMOTE_UNCONFIGURED' : 'INVALID_ARGUMENT', requestId }, status, requestId);
+    const message = error instanceof Error ? error.message : 'invalid handoff argument';
+    return json({ error: message, code: 'INVALID_ARGUMENT', requestId }, 400, requestId);
+  }
+
+  let remote: string | null;
+  try {
+    remote = await registeredSourceRemote(env.EVIDENCE, repo);
+  } catch {
+    return json({ error: 'source registry record is invalid', code: 'SOURCE_REGISTRY_INVALID', requestId }, 500, requestId);
+  }
+  if (!remote) {
+    return json({ error: 'source repository is not bootstrapped', code: 'SOURCE_NOT_BOOTSTRAPPED', requestId }, 503, requestId);
   }
 
   let handle: HandoffRepoHandle;
