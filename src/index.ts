@@ -125,9 +125,19 @@ function json(body: unknown, status = 200, requestId?: string): Response {
   return new Response(JSON.stringify(body), { status, headers });
 }
 
-function authorized(request: Request, env: Env): boolean {
+async function authorized(request: Request, env: Env): Promise<boolean> {
   if (!env.GITFLARE_ADMIN_TOKEN) return false;
-  return request.headers.get('authorization') === `Bearer ${env.GITFLARE_ADMIN_TOKEN}`;
+  const provided = request.headers.get('authorization') ?? '';
+  const expected = `Bearer ${env.GITFLARE_ADMIN_TOKEN}`;
+  const encoder = new TextEncoder();
+  const [actualHash, expectedHash] = await Promise.all([
+    crypto.subtle.digest('SHA-256', encoder.encode(provided)),
+    crypto.subtle.digest('SHA-256', encoder.encode(expected)),
+  ]);
+  const actual = new Uint8Array(actualHash), wanted = new Uint8Array(expectedHash);
+  let different = 0;
+  for (let i = 0; i < wanted.length; i++) different |= actual[i] ^ wanted[i];
+  return different === 0;
 }
 
 function requireString(value: unknown, label: string): string {
@@ -279,6 +289,8 @@ async function createRepoToken(
     token = await repo.createToken(scope, ttl);
   } catch {
     throw upstreamFailure('ARTIFACTS_TOKEN_CREATE_FAILED');
+  } finally {
+    repo[Symbol.dispose]?.();
   }
 
   emit('info', 'repo.token.create.succeeded', ctx, {
@@ -332,7 +344,7 @@ export default {
       }, 200, ctx.requestId));
     }
 
-    if (!authorized(request, env)) {
+    if (!(await authorized(request, env))) {
       emit('warn', 'auth.denied', ctx, {
         status: 401,
         error_code: 'UNAUTHORIZED',

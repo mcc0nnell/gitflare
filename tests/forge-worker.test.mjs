@@ -26,6 +26,10 @@ function mockEnv() {
             calls.push(['fork', forkName, opts]);
             return { name: forkName, remote: 'https://example.invalid/' + forkName, token: 'mock-credential' };
           },
+          async createToken(scope, ttl) {
+            calls.push(['token', scope, ttl]);
+            return { plaintext: 'read-credential', expiresAt: '2026-10-12T04:00:00Z' };
+          },
           [Symbol.dispose]() { calls.push(['dispose']); },
         };
       },
@@ -67,4 +71,34 @@ test('fork provider errors return generic 502, not internal exception strings', 
   const response = await worker.fetch(request('/repos/repo/forks'), env);
   assert.equal(response.status, 502);
   assert.doesNotMatch(JSON.stringify(await response.json()), /sensitive platform/);
+});
+
+test('token route uses read scope by default and releases its Artifacts handle', async () => {
+  const { env, calls } = mockEnv();
+  const res = await worker.fetch(request('/repos/repo/tokens', 'POST', 'operator-secret', {}), env);
+  assert.equal(res.status, 201);
+  const body = await res.json();
+  assert.equal(body.scope, 'read');
+  assert.equal(body.ttl, 900);
+  assert.deepEqual(calls.find(c => c[0] === 'token'), ['token','read',900]);
+  assert.deepEqual(calls.at(-1), ['dispose']);
+});
+
+test('token handle is released even when issuance fails', async () => {
+  const { env, calls } = mockEnv();
+  env.ARTIFACTS.get = async () => ({
+    async createToken() { throw Error('private upstream message'); },
+    [Symbol.dispose]() { calls.push(['dispose']); },
+  });
+  const res = await worker.fetch(request('/repos/repo/tokens', 'POST', 'operator-secret', {}), env);
+  assert.equal(res.status, 502);
+  assert.deepEqual(calls.at(-1), ['dispose']);
+  assert.doesNotMatch(JSON.stringify(await res.json()), /private upstream/);
+});
+
+test('invalid bearer credentials and token scopes never touch Artifacts', async () => {
+  const { env, calls } = mockEnv();
+  assert.equal((await worker.fetch(request('/repos/repo/tokens', 'POST', 'operator-secret-wrong', {}), env)).status, 401);
+  assert.equal((await worker.fetch(request('/repos/repo/tokens', 'POST', 'operator-secret', { scope: 'admin' }), env)).status, 400);
+  assert.equal(calls.length, 0);
 });
