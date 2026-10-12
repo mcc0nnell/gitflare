@@ -74,14 +74,20 @@ interface LogFields {
 }
 
 class GitflareError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly boundary: 'request' | 'auth' | 'artifacts' | 'gitflare';
   constructor(
-    readonly status: number,
-    readonly code: string,
+    status: number,
+    code: string,
     message: string,
-    readonly boundary: 'request' | 'auth' | 'artifacts' | 'gitflare' = 'request',
+    boundary: 'request' | 'auth' | 'artifacts' | 'gitflare' = 'request',
   ) {
     super(message);
     this.name = 'GitflareError';
+    this.status = status;
+    this.code = code;
+    this.boundary = boundary;
   }
 }
 
