@@ -1,4 +1,4 @@
-import { provisionAgentFork } from './agent-forks';
+import { provisionAgentFork } from './agent-forks.ts';
 
 type TokenScope = 'read' | 'write';
 type LogLevel = 'info' | 'warn' | 'error';
