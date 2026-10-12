@@ -1,3 +1,5 @@
+import { provisionAgentFork } from './agent-forks.ts';
+
 type TokenScope = 'read' | 'write';
 type LogLevel = 'info' | 'warn' | 'error';
 
@@ -17,6 +19,8 @@ interface ArtifactTokenResult {
 }
 
 interface ArtifactRepoHandle {
+  fork(name: string, opts: { description: string; defaultBranchOnly: boolean; readOnly: boolean }): Promise<{ name: string; remote: string; defaultBranch?: string; token?: unknown }>;
+  [Symbol.dispose]?: () => void;
   createToken(scope?: TokenScope, ttl?: number): Promise<ArtifactTokenResult>;
 }
 
@@ -70,14 +74,20 @@ interface LogFields {
 }
 
 class GitflareError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly boundary: 'request' | 'auth' | 'artifacts' | 'gitflare';
   constructor(
-    readonly status: number,
-    readonly code: string,
+    status: number,
+    code: string,
     message: string,
-    readonly boundary: 'request' | 'auth' | 'artifacts' | 'gitflare' = 'request',
+    boundary: 'request' | 'auth' | 'artifacts' | 'gitflare' = 'request',
   ) {
     super(message);
     this.name = 'GitflareError';
+    this.status = status;
+    this.code = code;
+    this.boundary = boundary;
   }
 }
 
@@ -115,9 +125,19 @@ function json(body: unknown, status = 200, requestId?: string): Response {
   return new Response(JSON.stringify(body), { status, headers });
 }
 
-function authorized(request: Request, env: Env): boolean {
+async function authorized(request: Request, env: Env): Promise<boolean> {
   if (!env.GITFLARE_ADMIN_TOKEN) return false;
-  return request.headers.get('authorization') === `Bearer ${env.GITFLARE_ADMIN_TOKEN}`;
+  const provided = request.headers.get('authorization') ?? '';
+  const expected = `Bearer ${env.GITFLARE_ADMIN_TOKEN}`;
+  const encoder = new TextEncoder();
+  const [actualHash, expectedHash] = await Promise.all([
+    crypto.subtle.digest('SHA-256', encoder.encode(provided)),
+    crypto.subtle.digest('SHA-256', encoder.encode(expected)),
+  ]);
+  const actual = new Uint8Array(actualHash), wanted = new Uint8Array(expectedHash);
+  let different = 0;
+  for (let i = 0; i < wanted.length; i++) different |= actual[i] ^ wanted[i];
+  return different === 0;
 }
 
 function requireString(value: unknown, label: string): string {
@@ -125,6 +145,17 @@ function requireString(value: unknown, label: string): string {
     throw new GitflareError(400, 'INVALID_ARGUMENT', `${label} must be a non-empty string`);
   }
   return value.trim();
+}
+
+function repoNameFromPath(segment: string): string {
+  let name: string;
+  try { name = decodeURIComponent(segment); } catch {
+    throw new GitflareError(400, 'INVALID_REPO_NAME', 'Invalid repository name');
+  }
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$/.test(name)) {
+    throw new GitflareError(400, 'INVALID_REPO_NAME', 'Invalid repository name');
+  }
+  return name;
 }
 
 function optionalString(value: unknown, label: string): string | undefined {
@@ -204,7 +235,8 @@ async function listRepos(request: Request, env: Env, ctx: RequestContext): Promi
 
 async function createRepo(request: Request, env: Env, ctx: RequestContext): Promise<Response> {
   const body = await readJson<CreateRepoBody>(request);
-  const name = requireString(body.name, 'name');
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new GitflareError(400, 'INVALID_ARGUMENT', 'JSON object required');
+  const name = repoNameFromPath(encodeURIComponent(requireString(body.name, 'name')));
   const description = optionalString(body.description, 'description');
   const readOnly = optionalBoolean(body.readOnly, 'readOnly');
   const defaultBranch = optionalString(body.defaultBranch, 'defaultBranch') ?? 'main';
@@ -241,6 +273,7 @@ async function createRepoToken(
   ctx: RequestContext,
 ): Promise<Response> {
   const body = await readJson<CreateTokenBody>(request);
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new GitflareError(400, 'INVALID_ARGUMENT', 'JSON object required');
   const scope = tokenScope(body.scope);
   const ttl = tokenTtl(body.ttl);
 
@@ -256,6 +289,8 @@ async function createRepoToken(
     token = await repo.createToken(scope, ttl);
   } catch {
     throw upstreamFailure('ARTIFACTS_TOKEN_CREATE_FAILED');
+  } finally {
+    repo[Symbol.dispose]?.();
   }
 
   emit('info', 'repo.token.create.succeeded', ctx, {
@@ -309,7 +344,7 @@ export default {
       }, 200, ctx.requestId));
     }
 
-    if (!authorized(request, env)) {
+    if (!(await authorized(request, env))) {
       emit('warn', 'auth.denied', ctx, {
         status: 401,
         error_code: 'UNAUTHORIZED',
@@ -334,8 +369,28 @@ export default {
       if (request.method === 'POST' && tokenMatch) {
         return complete(
           ctx,
-          await createRepoToken(request, env, decodeURIComponent(tokenMatch[1]), ctx),
+          await createRepoToken(request, env, repoNameFromPath(tokenMatch[1]), ctx),
         );
+      }
+
+      const forkMatch = /^\/repos\/([^/]+)\/forks$/.exec(url.pathname);
+      if (request.method === 'POST' && forkMatch) {
+        const body = await readJson<{ label?: unknown }>(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          throw new GitflareError(400, 'INVALID_ARGUMENT', 'JSON object required');
+        }
+        const label = optionalString(body.label, 'label') ?? 'isolated agent workspace';
+        const name = repoNameFromPath(forkMatch[1]);
+        try {
+          const fork = await provisionAgentFork(env.ARTIFACTS, name, label);
+          emit('info', 'repo.fork.created', ctx, { repo: name, fork: fork.fork });
+          return complete(ctx, json(fork, 201, ctx.requestId));
+        } catch (error) {
+          if (error instanceof Error && error.message.startsWith('Invalid')) {
+            throw new GitflareError(400, 'INVALID_ARGUMENT', error.message);
+          }
+          throw upstreamFailure('ARTIFACTS_FORK_FAILED');
+        }
       }
 
       throw new GitflareError(404, 'NOT_FOUND', 'Not found');
