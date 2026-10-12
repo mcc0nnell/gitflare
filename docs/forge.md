@@ -96,6 +96,36 @@ independently verified evidence. This check is not a lease: a real integration
 must use a last-moment expected-ref condition and verify the resulting remote
 commit after the push. Gitflare does not yet provide that write path.
 
+## Operator-only fast-forward promotion
+
+The manual promotion CLI recomputes the signed review and rehashes evidence,
+requires the exact reviewed receipt digest as an explicit operator approval,
+checks that the candidate is a descendant of the target, reads the live remote
+ref, then uses an expected-ref Git push lease. It verifies the remote SHA after
+the update and never retries a failed or unverifiable push.
+
+**Read-only preview (default):**
+
+    npm run forge:promote -- \
+      --repo /work/checkout --base "$BASE_SHA" --target "$TARGET_SHA" \
+      --candidate "$CANDIDATE_SHA" --target-ref refs/remotes/origin/main \
+      --remote "$ARTIFACTS_REMOTE" --remote-ref refs/heads/main \
+      --receipt /operator/evidence/review.json \
+      --checks /operator/evidence/attestation.json \
+      --evidence-dir /operator/evidence --trusted-key /operator/ci.pub.pem \
+      --issuer gitflare-ci --require-check git-fsck --require-check diff-check
+
+An authorized human can repeat the exact command with
+`--execute --approve <receiptSha256>` after inspecting the review. The digest
+is not a human identity or signature: RBAC, durable approvals and independent
+application test execution are still required for production. Do not grant
+this CLI or write credentials to coding agents.
+
+Only fast-forward candidates are eligible. The expected-ref lease makes the
+push conditional on the exact remote target; the ancestor proof prevents the
+lease from being used to force-replace existing history. Divergent multi-agent
+changes remain BLOCKED pending a separately tested merge commit workflow.
+
 ## Production integration remains a separate trust boundary
 
 1. Validate the exact candidate commit in a clean, isolated runner.
@@ -127,16 +157,24 @@ three independent forked agent workspaces. Each agent performed an authenticated
 Git clone, commit, and push. The local trusted producer signed Git evidence;
 the review gate accepted the two compatible changes and rejected a conflicting
 parser change. The canonical remote SHA remained unchanged and all four
-repositories were deleted successfully. **No production Worker was deployed.**
+repositories were deleted successfully. A second explicit opt-in run verified
+a fast-forward integration, the exact resulting remote SHA and replay blocking
+inside the disposable repository. **No production Worker was deployed.**
 
 Reproduce this manually (requires Cloudflare login, Workers Paid/Artifacts
 access, Python 3, Node 22, Git, and potentially billable resources):
 
     npm run smoke:artifacts -- --yes-create-disposable-artifacts
 
+The additional optional flag exercises one approved integration solely in
+the disposable canonical test repository:
+
+    npm run smoke:artifacts -- --yes-create-disposable-artifacts --exercise-fast-forward-promotion
+
 The script refuses to run without that flag or if a local `.dev.vars` already
 exists. It creates a private temporary administrator secret, launches a local
 Worker with a remote Artifacts binding, and cleans up all test repositories
-and credentials afterward. It never merges to canonical main. If a cleanup
+and credentials afterward. By default, it never changes canonical main; the additional flag permits a
+fast-forward push only to the disposable canonical test repository. If a cleanup
 fails, the script prints `CLEANUP_FAILED` with the repository name so the
 operator can delete it manually. Do not enable this in automatic CI.

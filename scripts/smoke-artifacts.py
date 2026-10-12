@@ -97,6 +97,26 @@ try:
     assert results['b']['verdict']=='READY_FOR_HUMAN_REVIEW'
     assert results['c']['verdict']=='BLOCKED' and 'GIT_MERGE_CONFLICT' in results['c']['reasons']
     print('RESULT: '+json.dumps({'source_sha_unchanged':True,'forks':3,'agent_results':results,'remote_preflight':pre['verdict']}),flush=True)
+    if '--exercise-fast-forward-promotion' in sys.argv:
+        phase('exercise explicit fast-forward promotion against disposable canonical repo')
+        evidence=root/'evidence-a'
+        receipt=json.loads((evidence/'review.json').read_text())
+        argv=['node',str(project/'scripts/forge-promote.mjs'),'--repo',str(src),
+              '--base',base,'--target',base,'--candidate',commits['a'],
+              '--target-ref','main','--remote',source['remote'],'--remote-ref','refs/heads/main',
+              '--receipt',str(evidence/'review.json'),'--checks',str(evidence/'attestation.json'),
+              '--evidence-dir',str(evidence),'--trusted-key',str(public),
+              '--issuer','trusted-fixed-git','--require-check','git-fsck',
+              '--require-check','diff-check','--execute','--approve',receipt['receiptSha256']]
+        credential_env={**os.environ,'GIT_TERMINAL_PROMPT':'0','GIT_CONFIG_COUNT':'1',
+            'GIT_CONFIG_KEY_0':'http.extraHeader','GIT_CONFIG_VALUE_0':'Authorization: Bearer '+source['token']}
+        result=json.loads(run(argv,env=credential_env))
+        assert result['verdict']=='INTEGRATED_AND_VERIFIED'
+        assert git(src,'ls-remote',source['remote'],'refs/heads/main',token=source['token']).split()[0]==commits['a']
+        replay=subprocess.run(argv,capture_output=True,text=True,env=credential_env,timeout=30)
+        assert replay.returncode==2 and json.loads(replay.stdout)['verdict']=='BLOCKED'
+        print('PROMOTION_RESULT: '+json.dumps({'integrated_sha_verified':True,'replay_blocked':True}),flush=True)
+
 finally:
     phase('cleanup temporary Cloudflare repositories and credentials')
     if server:
