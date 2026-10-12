@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { evidenceDigest, isInside } from './forge-evidence.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const DIGEST = /^[0-9a-f]{64}$/;
@@ -98,6 +99,9 @@ function inspectAttestation(raw, p, reasons) {
 
 export function evaluate(p) {
   const repo = resolve(p.repo), reasons = [];
+  if (!Array.isArray(p.required) || !p.required.length) reasons.push('REQUIRED_CHECKS_EMPTY');
+  if (p.trustedKey && isInside(repo, p.trustedKey)) reasons.push('UNTRUSTED_KEY_LOCATION');
+  if (p.checks && isInside(repo, p.checks)) reasons.push('UNTRUSTED_ATTESTATION_LOCATION');
   for (const name of ['base', 'target', 'candidate']) {
     if (!commitExists(repo, p[name])) reasons.push('INVALID_' + name.toUpperCase() + '_COMMIT');
   }
@@ -116,6 +120,18 @@ export function evaluate(p) {
   try { raw = JSON.parse(readFileSync(resolve(p.checks), 'utf8')); }
   catch { reasons.push('CHECKS_FILE_UNAVAILABLE'); }
   const { checks, verified } = inspectAttestation(raw, p, reasons);
+  if (!p.evidenceDir) reasons.push('EVIDENCE_DIR_REQUIRED');
+  else if (isInside(repo, p.evidenceDir)) reasons.push('EVIDENCE_UNTRUSTED_LOCATION');
+  else for (const check of checks) {
+    if (!check.evidenceSha256) continue;
+    try {
+      if (evidenceDigest(p.evidenceDir, check.id) !== check.evidenceSha256) {
+        reasons.push('EVIDENCE_MISMATCH:' + check.id);
+      }
+    } catch {
+      reasons.push('EVIDENCE_UNAVAILABLE:' + check.id);
+    }
+  }
   let candidatePaths = [], targetPaths = [];
   let mergeSimulation = { state: 'NOT_RUN', treeSha: null };
   if (!reasons.some(x => x.startsWith('INVALID_') || x.startsWith('BASE_NOT_ANCESTOR'))) {
@@ -161,7 +177,7 @@ export function main(argv) {
   try {
     const flags = { '--repo': 'repo', '--base': 'base', '--target': 'target',
       '--candidate': 'candidate', '--target-ref': 'targetRef',
-      '--checks': 'checks', '--trusted-key': 'trustedKey',
+      '--checks': 'checks', '--trusted-key': 'trustedKey', '--evidence-dir': 'evidenceDir',
       '--issuer': 'issuer', '--out': 'out', '--require-check': 'required' };
     const p = { required: [] };
     for (let i = 0; i < argv.length; i += 2) {
@@ -171,7 +187,7 @@ export function main(argv) {
       else if (p[key] !== undefined) throw new Error('Repeated argument: ' + argv[i]);
       else p[key] = argv[i + 1];
     }
-    for (const key of ['repo', 'base', 'target', 'candidate', 'targetRef', 'checks', 'trustedKey', 'issuer']) {
+    for (const key of ['repo', 'base', 'target', 'candidate', 'targetRef', 'checks', 'trustedKey', 'issuer', 'evidenceDir']) {
       if (!p[key]) throw new Error('Missing ' + key);
     }
     if (!p.required.length || p.required.some(x => !ID.test(x)) ||

@@ -8,7 +8,9 @@
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run test:forge && wrangler deploy --dry-run",
     "deploy": "wrangler deploy",
-    "test:forge": "node --experimental-strip-types --test tests/*.test.mjs"
+    "test:forge": "node --experimental-strip-types --test tests/*.test.mjs",
+    "forge:prove": "node scripts/forge-prove.mjs",
+    "forge:preflight": "node scripts/forge-preflight.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3",

@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { generateKeyPairSync, sign } from 'node:crypto';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { generateKeyPairSync, sign, createHash } from 'node:crypto';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { evaluate, main, canonicalAttestation } from '../scripts/forge-gate.mjs';
 
-const EVIDENCE = 'a'.repeat(64);
+const LOG = 'trusted-check-passed\n';
+const EVIDENCE = createHash('sha256').update(LOG).digest('hex');
 const git = (repo, ...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
 function fixture() {
   const repo = mkdtempSync(join(tmpdir(), 'forge-v2-'));
@@ -21,7 +22,9 @@ function fixture() {
   const candidate = git(repo, 'rev-parse', 'HEAD');
   git(repo, 'switch', '-q', 'main');
   writeFileSync(join(repo, 'b'), 'b1\n'); git(repo, 'commit', '-qam', 'target');
-  const target = git(repo, 'rev-parse', 'HEAD'), checks = join(repo, 'checks.json'), trustedKey = join(repo, 'key.pem');
+  const evidenceDir = mkdtempSync(join(tmpdir(), 'forge-evidence-'));
+  const target = git(repo, 'rev-parse', 'HEAD'), checks = join(evidenceDir, 'checks.json'), trustedKey = join(evidenceDir, 'key.pem');
+  writeFileSync(join(evidenceDir, 'test.log'), LOG);
   const keys = generateKeyPairSync('ed25519');
   writeFileSync(trustedKey, keys.publicKey.export({ type: 'spki', format: 'pem' }));
   const attest = (overrides = {}) => {
@@ -32,9 +35,9 @@ function fixture() {
     return raw;
   };
   attest();
-  return { repo, base, target, candidate, checks, trustedKey, attest,
-    p: () => ({ repo, base, target, candidate, checks, trustedKey, issuer: 'gitflare-ci', targetRef: 'main', required: ['test'] }),
-    cleanup: () => rmSync(repo, { recursive: true, force: true }) };
+  return { repo, base, target, candidate, checks, trustedKey, evidenceDir, attest,
+    p: () => ({ repo, base, target, candidate, checks, trustedKey, evidenceDir, issuer: 'gitflare-ci', targetRef: 'main', required: ['test'] }),
+    cleanup: () => { rmSync(repo, { recursive: true, force: true }); rmSync(evidenceDir, { recursive: true, force: true }); } };
 }
 test('clean disjoint commits yield stable receipt and never advance main', () => {
   const f = fixture(); try {
@@ -94,7 +97,7 @@ test('CLI requires signing authority and rejects malformed arguments', () => {
   const f = fixture(); try {
     assert.equal(main(['--repo', f.repo]), 1);
     assert.equal(main(['--repo', f.repo, '--base', f.base, '--target', f.target, '--candidate', f.candidate,
-      '--target-ref', 'main', '--checks', f.checks, '--issuer', 'gitflare-ci', '--trusted-key', f.trustedKey,
+      '--target-ref', 'main', '--checks', f.checks, '--evidence-dir', f.evidenceDir, '--issuer', 'gitflare-ci', '--trusted-key', f.trustedKey,
       '--require-check', 'test', '--out', join(f.repo, 'receipt.json')]), 0);
     assert.equal(main(['--repo', f.repo, '--base', f.base, '--target', f.target, '--candidate', f.candidate,
       '--target-ref', '-evil', '--checks', f.checks, '--issuer', 'gitflare-ci', '--trusted-key', f.trustedKey,
@@ -108,5 +111,35 @@ test('candidate already represented in target tree is not a meaningful merge', (
     const target = git(f.repo, 'rev-parse', 'main'); f.attest({ targetSha: target });
     const result = evaluate({ ...f.p(), target });
     assert.ok(result.reasons.includes('CANDIDATE_NO_EFFECTIVE_CHANGE'));
+  } finally { f.cleanup(); }
+});
+
+test('modified signed evidence blocks even with intact Ed25519 attestation', () => {
+  const f = fixture(); try {
+    writeFileSync(join(f.evidenceDir, 'test.log'), 'tampered after signing\n');
+    const v = evaluate(f.p());
+    assert.equal(v.attestation.verified, true);
+    assert.ok(v.reasons.includes('EVIDENCE_MISMATCH:test'));
+  } finally { f.cleanup(); }
+});
+test('missing evidence, symlink and candidate-controlled evidence fail closed', () => {
+  const f = fixture(); try {
+    assert.ok(evaluate({ ...f.p(), evidenceDir: undefined }).reasons.includes('EVIDENCE_DIR_REQUIRED'));
+    assert.ok(evaluate({ ...f.p(), evidenceDir: f.repo }).reasons.includes('EVIDENCE_UNTRUSTED_LOCATION'));
+    unlinkSync(join(f.evidenceDir, 'test.log'));
+    symlinkSync(join(f.repo, 'a'), join(f.evidenceDir, 'test.log'));
+    assert.ok(evaluate(f.p()).reasons.includes('EVIDENCE_UNAVAILABLE:test'));
+  } finally { f.cleanup(); }
+});
+
+test('trusted keys and signed attestations cannot be inside the candidate checkout', () => {
+  const f = fixture(); try {
+    const key = join(f.repo, 'unsafe-key.pem');
+    writeFileSync(key, readFileSync(f.trustedKey));
+    assert.ok(evaluate({ ...f.p(), trustedKey: key }).reasons.includes('UNTRUSTED_KEY_LOCATION'));
+    const checks = join(f.repo, 'unsafe-attestation.json');
+    writeFileSync(checks, readFileSync(f.checks));
+    assert.ok(evaluate({ ...f.p(), checks }).reasons.includes('UNTRUSTED_ATTESTATION_LOCATION'));
+    assert.ok(evaluate({ ...f.p(), required: [] }).reasons.includes('REQUIRED_CHECKS_EMPTY'));
   } finally { f.cleanup(); }
 });

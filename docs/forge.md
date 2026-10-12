@@ -28,6 +28,7 @@ The credential-free gate runs against a complete local Git clone. It uses the ac
       --target-ref refs/remotes/origin/main \
       --checks /trusted-evidence/checks.json \
       --trusted-key /etc/gitflare/trusted-ci-ed25519.pub.pem \
+      --evidence-dir /trusted-evidence \
       --issuer gitflare-ci \
       --require-check tests \
       --out /trusted-evidence/review.json
@@ -50,9 +51,50 @@ The signed JSON envelope:
 
 Sign the bytes returned by the exported canonicalAttestation(envelope) helper, before adding the signature. Canonicalization sorts checks and serializes only fixed identity/check fields. The trusted validation runner must calculate evidence file SHA-256 hashes before signing.
 
-The gate validates signature, issuer, exact commit identities, required checks, ancestry, target snapshot, and actual merge result. It does **not** fetch or rehash the external evidence blobs, independently prove that tests were run, or verify remote Cloudflare ref authority. Those remain trusted-runner/source-provider obligations.
+The gate validates signature, issuer, exact commit identities, required checks, evidence file bytes, ancestry, target snapshot, and actual merge result. It does **not** independently prove the process that produced the signed results ran in an isolated environment, or verify remote Cloudflare ref authority. Those remain trusted-runner/source-provider obligations.
 
 The receipt returns READY_FOR_HUMAN_REVIEW (exit 0) or BLOCKED (exit 2). Malformed CLI usage exits 1. Receipt SHA-256 is a checksum, not a signature.
+
+## Independently observed Git checks
+
+The fixed-check producer uses `git fsck --connectivity-only --no-reflogs` and
+`git diff --no-ext-diff --no-textconv --check` against the exact base and
+candidate SHAs. It never executes agent-supplied scripts, npm lifecycle hooks,
+or shell snippets. An operator creates a 0600 Ed25519 private key **outside**
+the untrusted checkout and runs:
+
+    npm run forge:prove -- \
+      --repo /work/checkout \
+      --base "$BASE_SHA" --target "$TARGET_SHA" --candidate "$CANDIDATE_SHA" \
+      --issuer gitflare-ci --private-key /operator/ci-ed25519.pem \
+      --evidence-dir /operator/evidence/new-run
+
+The evidence directory must not already exist, and the signer creates private
+log files and an attestation there. Each check status comes from the actual
+Git command exit code. The review gate now **rehashes actual evidence files**
+(`<check-id>.log`) and rejects modified bytes, missing files, symlinks, and
+candidate-controlled evidence paths. Missing required checks always BLOCK.
+
+This producer proves only **fixed Git integrity/diff checks**. It does **not**
+replace independent, sandboxed application-test execution. Only deploy the
+producer from a separately trusted revision and keep signing keys inaccessible
+to untrusted test processes. Do not claim that a test was run merely because
+an agent supplied a PASS string.
+
+## Read-only remote drift preflight
+
+    npm run forge:preflight -- \
+      --repo /work/checkout --receipt /operator/evidence/review.json \
+      --remote "$ARTIFACTS_REMOTE" --remote-ref refs/heads/main \
+      --review-ref refs/remotes/origin/main
+
+This reads the currently published Git ref with `git ls-remote`, checks the
+operator-stored review receipt's checksum, and returns `TARGET_UNCHANGED` or
+`BLOCKED`. The checksum is **not** an authenticity signature; the receipt path
+must be operator-controlled, and the approved review must still be bound to
+independently verified evidence. This check is not a lease: a real integration
+must use a last-moment expected-ref condition and verify the resulting remote
+commit after the push. Gitflare does not yet provide that write path.
 
 ## Production integration remains a separate trust boundary
 
