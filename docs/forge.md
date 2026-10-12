@@ -72,7 +72,7 @@ There is deliberately **no automatic merge or deployment endpoint** in this slic
     npm run test:forge
     npm run check
 
-The last command also uses Wrangler dry-run and requires dependencies installed. The package pins Wrangler 4.145.0, the documented minimum for generated Artifacts types and some remote-binding methods.
+The last command also uses Wrangler dry-run and requires dependencies installed. The package pins Wrangler 4.149.0. Use `npm run dev` for local Worker execution with an explicitly remote Artifacts binding; it does not require the legacy `--remote` flag. Put the local administrator token in an ignored `.dev.vars` file. All Artifacts binding operations still address the real Cloudflare namespace.
 
 ## Remaining acceptance work
 
