@@ -13,7 +13,8 @@
   "artifacts": [
     {
       "binding": "ARTIFACTS",
-      "namespace": "gitflare"
+      "namespace": "gitflare",
+      "remote": true
     }
   ]
 }
