@@ -95,6 +95,10 @@ The Worker config binds `ARTIFACTS` to the `gitflare` namespace.
 
 [Forge signed review and agent fork guide](docs/forge.md) describes isolated Artifacts task repositories, a deterministic local Git merge simulation, and Ed25519-signed CI attestations. The gate is **review-only**: it cannot merge, deploy, or move refs. A fixed-check evidence producer, read-only remote drift preflight, and operator-approved fast-forward-only promotion CLI are included. The Cloudflare Artifacts smoke has passed on disposable repositories. Hardened independent application CI and authenticated human approvals remain future production gates.
 
+## Forge receipt inspector
+
+[GET /forge](docs/forge-console.md) offers a read-only client-side receipt viewer with an ANSI-inspired graph, evidence summaries and local SHA-256 checks. It does not upload evidence or gain repository credentials.
+
 ## Push-to-execution example
 
 [`examples/artifacts-push-workflow`](examples/artifacts-push-workflow/) shows the next seam:
