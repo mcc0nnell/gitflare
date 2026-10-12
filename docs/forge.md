@@ -119,3 +119,24 @@ The last command also uses Wrangler dry-run and requires dependencies installed.
 ## Remaining acceptance work
 
 Create three real Artifacts forks, validate unrelated and conflicting changes with independent signatures, display events in the ANSI console, then verify integration under target-ref races. This has not been exercised against a live Cloudflare account; Workers Paid/Artifacts access and operator credentials are required.
+
+## Real Cloudflare Artifacts concurrency smoke (opt-in only)
+
+The October 12, 2026 smoke used a disposable canonical Artifacts repository and
+three independent forked agent workspaces. Each agent performed an authenticated
+Git clone, commit, and push. The local trusted producer signed Git evidence;
+the review gate accepted the two compatible changes and rejected a conflicting
+parser change. The canonical remote SHA remained unchanged and all four
+repositories were deleted successfully. **No production Worker was deployed.**
+
+Reproduce this manually (requires Cloudflare login, Workers Paid/Artifacts
+access, Python 3, Node 22, Git, and potentially billable resources):
+
+    npm run smoke:artifacts -- --yes-create-disposable-artifacts
+
+The script refuses to run without that flag or if a local `.dev.vars` already
+exists. It creates a private temporary administrator secret, launches a local
+Worker with a remote Artifacts binding, and cleans up all test repositories
+and credentials afterward. It never merges to canonical main. If a cleanup
+fails, the script prints `CLEANUP_FAILED` with the repository name so the
+operator can delete it manually. Do not enable this in automatic CI.
