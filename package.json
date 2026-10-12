@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run test:forge && wrangler deploy --dry-run",
     "deploy": "wrangler deploy",
-    "test:forge": "node --experimental-strip-types --test tests/*.test.mjs",
+    "test:forge": "node --no-warnings --experimental-strip-types --experimental-loader ./tests/cloudflare-loader.mjs --test tests/*.test.mjs",
     "forge:prove": "node scripts/forge-prove.mjs",
     "forge:preflight": "node scripts/forge-preflight.mjs",
     "smoke:artifacts": "python3 scripts/smoke-artifacts.py",

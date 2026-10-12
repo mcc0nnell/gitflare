@@ -99,6 +99,10 @@ The Worker config binds `ARTIFACTS` to the `gitflare` namespace.
 
 [GET /forge](docs/forge-console.md) offers a read-only client-side receipt viewer with an ANSI-inspired graph, evidence summaries and local SHA-256 checks. It does not upload evidence or gain repository credentials.
 
+## Forge durable activity timeline
+
+The [Forge event journal](docs/forge-events.md) provides per-repository SQLite-backed agent activity, deterministic event IDs, bounded replay, and **short-lived read-only capabilities** for the Forge console. An independent producer can append events through a separate write credential. The browser never gains repository-write authority. This is a draft, opt-in infrastructure addition and does not deploy automatically.
+
 ## Push-to-execution example
 
 [`examples/artifacts-push-workflow`](examples/artifacts-push-workflow/) shows the next seam:
