@@ -1,20 +1,43 @@
 # Architecture
 
-Gitflare is a thin forge/control-plane layer around Cloudflare Artifacts.
-
-The central design decision is now:
+Gitflare is a thin forge/control-plane layer with a replaceable Git source plane.
 
 ```text
-ARTIFACTS = Git repository primitive
-GITFLARE  = policy + collaboration + automation handoff
+GIT SOURCE = Cloudflare Artifacts OR RepoContainer + R2
+GITFLARE   = provider seam + policy + collaboration + automation handoff
 CLOUDFLARE = execution + evidence + deployment plane
 ```
 
-Gitflare does not implement Git object storage, ref coordination, smart HTTP, pack negotiation, or repository durability itself.
+Normal Git semantics are non-negotiable. The source provider may change; commits, refs, branches, tags, clone, fetch, and push do not.
 
-## Source plane
+## SourceControlProvider
 
-Cloudflare Artifacts is the source plane.
+Gitflare has two source-plane strategies.
+
+| Provider | Git implementation | Live repository storage | Coordination | Durable storage |
+| --- | --- | --- | --- | --- |
+| Cloudflare Artifacts | Cloudflare Artifacts | managed by Artifacts | managed by Artifacts | managed by Artifacts |
+| self-hosted RepoContainer | real `git` / `git-http-backend` | Container local POSIX disk | one RepoContainer DO per repo | versioned R2 checkpoints |
+
+The collaboration and execution layers should consume a narrow provider contract rather than assuming one implementation.
+
+Conceptually:
+
+```text
+SourceControlProvider
+  list/create repo
+  resolve revision
+  issue credential
+  clone/fetch/push endpoint
+  emit durable push event
+  expose commit/status identity
+```
+
+Provider-specific storage details stay below that boundary.
+
+## Managed provider: Cloudflare Artifacts
+
+Cloudflare Artifacts is the preferred source plane when available.
 
 Each repository has:
 
@@ -26,64 +49,143 @@ Each repository has:
 - normal clone/fetch/pull/push behavior
 - push events that can trigger Cloudflare automation
 
-That is enough Git substrate for Gitflare to build on without recreating a source-control server.
-
-## Control plane
-
-A Gitflare Worker may eventually provide a friendly control API over Artifacts for concerns such as:
-
-- project/repository registration
-- policy
-- human and agent identity mapping
-- token minting rules
-- source-provider mirrors
-- review/change records
-- commit/check status projection
-- build/deploy/evidence links
-
-The Worker should call the Artifacts binding or REST API rather than manipulating Git internals.
-
-## Git data plane
-
-Normal Git clients talk directly to the Artifacts repository remote.
+For this provider, Gitflare does not proxy Git traffic or implement repository durability. Artifacts owns those concerns.
 
 ```text
 Developer / agent
       |
-      | git clone / fetch / pull / push
+      | normal Git
       v
 Cloudflare Artifacts repository
+      |
+      | cf.artifacts.repo.pushed
+      v
+Cloudflare Workflow / Gitflare automation
 ```
 
-Gitflare should not proxy Git traffic unless a future requirement proves a proxy is necessary.
+No additional repository Durable Object is required.
 
-This keeps credentials repo-scoped and lets Cloudflare's Git implementation own protocol compatibility.
+## Self-hosted provider: RepoContainer + R2
+
+The self-hosted provider exists for two reasons:
+
+1. Artifacts is currently a closed beta.
+2. Some operators may prefer to own the Git substrate even when a managed provider exists.
+
+Its topology is:
+
+```text
+Developer / agent
+      |
+      | HTTPS Git smart protocol
+      v
+Gitflare Worker
+  auth / route owner+repo
+      |
+      | stable named DO
+      v
+RepoContainer
+Container class = Durable Object + Linux Container
+      |
+      +-- SQLite: committed generation / checkpoint pointer / phase
+      |
+      +-- local disk: /data/repo.git
+      |              real git-http-backend
+      |
+      `-- completed checkpoint stream
+                     |
+                     v
+                     R2
+```
+
+### Why the Durable Object exists
+
+The Durable Object is the repository coordinator, not a shadow Git database.
+
+One stable `owner/repo` name maps to one `RepoContainer` identity. That object serializes repository control transitions and keeps a tiny strongly consistent record of what state is acknowledged as durable.
+
+The Git object graph itself remains in an ordinary bare repository on Container local disk while the Container is active.
+
+### Why R2 is not the live filesystem
+
+Git relies on normal filesystem behavior for lock files, atomic ref replacement, pack creation, and repository maintenance.
+
+The self-hosted provider therefore does not depend on an R2 FUSE mount for the active bare repository. R2 is used as durable checkpoint storage after Git has completed its local transaction.
+
+This keeps each storage system in the job it is best suited for:
+
+| Layer | Responsibility |
+| --- | --- |
+| Container local disk | live Git repository and POSIX semantics |
+| RepoContainer DO SQLite | authoritative generation pointer and crash phase |
+| R2 | immutable/versioned completed repository checkpoints |
+
+### Push commit protocol
+
+A push is acknowledged only after its resulting repository state is durable.
+
+```text
+ensure last committed generation restored
+      |
+      v
+DO SQLite: phase = mutating
+      |
+      v
+git receive-pack on local disk
+      |
+      v
+git fsck --connectivity-only
+      |
+      v
+stream completed checkpoint to R2 generation N+1
+      |
+      v
+DO SQLite atomically advances committed generation
+      |
+      v
+return Git push response
+```
+
+Failure semantics are intentional:
+
+- crash before `phase=mutating` persists: no mutation began
+- crash after local Git mutation but before R2 checkpoint: next request restores the previous committed generation
+- R2 upload succeeds but DO pointer does not commit: the uploaded object is an orphan, not authoritative
+- DO generation commits but client loses the response: the push is durable; a retry observes ordinary Git ref state
+
+An unacknowledged local mutation is never allowed to become authoritative merely because the Container survived.
+
+### Container restart protocol
+
+The repository process exposes a random boot identifier created at Container process start.
+
+The DO caches the last boot ID and ready generation only in memory. If the boot ID changes, the local filesystem is considered untrusted until the current committed R2 generation has been restored and validated.
+
+The implementation includes an admin-only forced restart route so this invariant can be exercised directly.
 
 ## Event plane
 
 Repository mutation becomes an event, not an excuse to put CI inside the source server.
 
+Managed provider:
+
 ```text
-git push
-   |
-   v
-Artifacts repository
-   |
-   | cf.artifacts.repo.pushed
-   v
-Cloudflare Workflow
-   |
-   +--> classify change
-   +--> checkout / snapshot
-   +--> test / build
-   +--> evidence
-   +--> deploy if policy permits
-   |
-   v
-status projection
+Artifacts push
+   -> cf.artifacts.repo.pushed
+   -> Workflow
 ```
 
-The source path should return as soon as the repository mutation is committed and the downstream work is accepted.
+Self-hosted provider:
+
+```text
+receive-pack
+   -> R2 checkpoint committed
+   -> DO generation advanced
+   -> logical repo.pushed event
+   -> Workflow
+```
+
+The self-hosted event is emitted only after durability admission. Downstream CI should not care which provider produced the revision.
 
 ## Execution plane
 
@@ -99,42 +201,30 @@ Use Sandbox or Containers for workloads requiring:
 - browser automation
 - arbitrary repository tooling
 
-Do not put build execution inside the Gitflare Worker.
+Do not put build execution inside the Git source service.
 
-## Evidence and artifacts
+## Evidence and build artifacts
 
-Do not confuse **Cloudflare Artifacts repositories** with CI build artifacts.
+Do not confuse source repositories with CI build artifacts or self-hosted source checkpoints.
 
-Artifacts owns versioned source trees and Git history.
-
-R2 remains appropriate for immutable execution evidence such as:
+A useful separation is:
 
 ```text
-runs/<run-id>/manifest.json
-runs/<run-id>/stdout.log
-runs/<run-id>/stderr.log
-runs/<run-id>/junit.xml
-runs/<run-id>/screenshots/
-runs/<run-id>/assurance/
-runs/<run-id>/build/
-runs/<run-id>/provenance.json
+source provider
+  Artifacts OR RepoContainer/R2 checkpoints
+
+execution evidence
+  R2 runs/<run-id>/...
+
+query/index metadata
+  D1 when useful
 ```
 
-D1 can index run metadata and relationships when queryability is useful.
-
-## Durable Objects
-
-The original Gitflare architecture proposed one Durable Object per repository to serialize ref updates. Artifacts already owns repository mutation and durable refs, so Gitflare must not duplicate that authority.
-
-Use Durable Objects only if Gitflare later needs strongly coordinated state that Artifacts itself does not own, for example a review-session coordinator or realtime collaboration object.
-
-No Durable Object should become a shadow Git repository.
+Build logs, test output, screenshots, provenance, assurance, and deploy evidence belong to the execution plane, not Git history.
 
 ## GitHub relationship
 
 GitHub is an optional collaboration provider, not a required execution layer.
-
-A project may choose:
 
 ```text
 GitHub
@@ -142,65 +232,61 @@ PRs / issues / discovery / reviews
       |
       | mirror or provider adapter
       v
-Cloudflare Artifacts
-canonical machine-consumed Git source
+SourceControlProvider
+      |
+      +--> Artifacts
+      `--> self-hosted RepoContainer + R2
       |
       v
 Cloudflare-native automation
 ```
 
-Or it may use Artifacts directly with a different human collaboration surface.
-
-Gitflare should model source providers behind a narrow adapter boundary so GitHub, GitLab, self-hosted Git, or another source can be connected without changing the execution architecture.
+Changing the human-facing collaboration surface or the Git source provider must not require rewriting the execution architecture.
 
 ## SCUMM3 dogfood topology
 
-The first production-shaped experiment is SCUMM3:
+The first production-shaped experiment remains SCUMM3.
+
+The managed path is:
 
 ```text
 GitHub main
-   |
-   | Git mirror during dogfood
-   v
-Cloudflare Artifacts
-scumm3-gitflare/scumm3
-   |
-   | cf.artifacts.repo.pushed
-   v
-Cloudflare CI Workflow
-   |
-   v
-Sandbox validation
-   |
-   +--> evidence
-   +--> check/status projection
-   +--> production deployment when admitted
+   -> verified mirror
+   -> Cloudflare Artifacts
+   -> cf.artifacts.repo.pushed
+   -> Cloudflare CI Workflow
+   -> Sandbox validation
 ```
 
-The mirror is transitional. Its purpose is to let humans keep using GitHub while proving that Cloudflare can own the machine path.
+The self-hosted path gives the same project a fallback:
+
+```text
+normal Git push
+   -> RepoContainer
+   -> committed R2 generation
+   -> Gitflare push event
+   -> same Cloudflare CI handoff
+```
 
 ## Security boundaries
 
-1. **Repository tokens are repo-scoped.** Prefer short-lived read tokens for checkout and write tokens only where a push is required.
-2. **Production credentials never enter untrusted PR execution.** Deployment authority is introduced only after trusted validation and explicit policy admission.
-3. **Source and execution authority stay separate.** A source provider can request work; it does not automatically gain deployment authority.
-4. **Mirrors are verified by commit identity.** A mirror operation is incomplete until the target ref matches the expected source commit.
-5. **Gitflare does not invent weaker Git semantics.** Artifacts remains the Git authority for repository history and refs.
+1. Repository credentials are provider-scoped and narrow. The self-hosted example uses bootstrap secrets only until short-lived repo-scoped credentials are added.
+2. Production credentials never enter untrusted source execution.
+3. Source and execution authority stay separate.
+4. Mirrors are verified by exact commit identity.
+5. The DO stores coordination metadata, not arbitrary Git object bodies.
+6. A self-hosted push is not acknowledged until the checkpoint pointer is durable.
+7. Internal Container import/export endpoints are not exposed as public repository routes.
 
-## Explicitly retired design
+## Retired design
 
-The following original Gitflare plan is no longer part of the architecture:
+Gitflare still does **not** implement Git object formats, pack negotiation, or ref algorithms itself.
 
-- loose Git objects stored manually in R2
-- Git ref tables authored by Gitflare in D1
-- repository-level ref CAS implemented in Durable Objects
-- custom `git-upload-pack` / `git-receive-pack` hosting
-- a Git smart-HTTP server built by Gitflare
+The retired design remains retired:
 
-Cloudflare Artifacts already supplies those source-control primitives.
+- loose Git objects manually modeled in R2
+- Git ref tables authored in D1
+- custom Git pack parsing
+- custom receive-pack/upload-pack implementations
 
-Deleting that work is a feature.
-
-## Current dependency
-
-Cloudflare Artifacts is currently a closed beta. Gitflare therefore treats Artifacts availability as an explicit platform prerequisite while the project is experimental.
+The self-hosted provider runs the actual Git binary and uses `git-http-backend`. The custom code is coordination and checkpointing around Git, not a reimplementation of Git.
