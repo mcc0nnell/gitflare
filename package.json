@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --remote",
+    "dev": "wrangler dev --ip 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run test:forge && wrangler deploy --dry-run",
     "deploy": "wrangler deploy",
@@ -12,6 +12,6 @@
   },
   "devDependencies": {
     "typescript": "5.9.3",
-    "wrangler": "4.145.0"
+    "wrangler": "4.149.0"
   }
 }
