@@ -74,6 +74,7 @@ GET  /healthz
 GET  /repos
 POST /repos
 POST /repos/:repo/tokens
+POST /repos/:repo/forks   # isolated agent workspace, admin-only
 ```
 
 All non-health routes require a `GITFLARE_ADMIN_TOKEN` Worker secret.
@@ -89,6 +90,10 @@ npm run dev
 ```
 
 The Worker config binds `ARTIFACTS` to the `gitflare` namespace.
+
+## Forge review gate
+
+[Forge signed review and agent fork guide](docs/forge.md) describes isolated Artifacts task repositories, a deterministic local Git merge simulation, and Ed25519-signed CI attestations. The gate is **review-only**: it cannot merge, deploy, or move refs. Live Cloudflare and independent signer integration still require acceptance testing.
 
 ## Push-to-execution example
 
@@ -124,7 +129,7 @@ GitHub contribution
 
 ## Status
 
-Gitflare is experimental and Cloudflare Artifacts is currently a closed beta. This repository is public so the architecture, implementation choices, and dogfood lessons can be developed in the open.
+Gitflare is experimental and Cloudflare Artifacts entered open beta on October 1, 2026 (Workers Paid access required). This repository is public so the architecture, implementation choices, and dogfood lessons can be developed in the open.
 
 Gitflare is not an official Cloudflare project and is not affiliated with or endorsed by Cloudflare, Inc.
 
