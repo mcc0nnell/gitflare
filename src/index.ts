@@ -1,3 +1,4 @@
+import { forgeConsoleHtml } from './forge-console.ts';
 import { provisionAgentFork } from './agent-forks.ts';
 
 type TokenScope = 'read' | 'write';
@@ -123,6 +124,21 @@ function json(body: unknown, status = 200, requestId?: string): Response {
   if (requestId) headers.set('x-gitflare-request-id', requestId);
 
   return new Response(JSON.stringify(body), { status, headers });
+}
+
+function forgeConsoleResponse(): Response {
+  const nonce = crypto.randomUUID().replaceAll('-', '');
+  return new Response(forgeConsoleHtml().replace('__FORGE_NONCE__', nonce), {
+    status: 200,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+      'content-security-policy': `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,
+      'x-content-type-options': 'nosniff',
+      'referrer-policy': 'no-referrer',
+      'x-frame-options': 'DENY',
+    },
+  });
 }
 
 async function authorized(request: Request, env: Env): Promise<boolean> {
@@ -333,6 +349,8 @@ export default {
     const ctx = requestContext(request, url);
 
     emit('info', 'request.received', ctx);
+
+    if (request.method === 'GET' && url.pathname === '/forge') return forgeConsoleResponse();
 
     if (request.method === 'GET' && url.pathname === '/healthz') {
       return complete(ctx, json({
