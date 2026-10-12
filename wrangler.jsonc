@@ -16,5 +16,19 @@
       "namespace": "gitflare",
       "remote": true
     }
-  ]
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "FORGE_EVENTS",
+        "class_name": "ForgeJournal"
+      }
+    ]
+  },
+  "exports": {
+    "ForgeJournal": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  }
 }

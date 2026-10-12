@@ -14,12 +14,15 @@ test('Forge inspector serves a read-only HTML page without admin credentials', a
   assert.match(html,/GITFLARE/);
   assert.match(html,/LOCAL RECEIPT INSPECTOR/);
   assert.match(html,/Load Forge receipt/);
-  assert.doesNotMatch(html,/sessionStorage|localStorage|GITFLARE_ADMIN_TOKEN|fetch\(/);
+  assert.match(html,/Live agent activity/);
+  assert.match(html,/FOLLOW EVENTS/);
+  assert.match(html,/epoch!==live.epoch/);
+  assert.doesNotMatch(html,/sessionStorage|localStorage|GITFLARE_ADMIN_TOKEN/);
   assert.doesNotMatch(html,/__FORGE_NONCE__/);
   const nonce=html.match(/<script nonce="([a-z0-9]+)">/i)?.[1];
   assert.ok(nonce);
   assert.ok(res.headers.get('content-security-policy').includes("script-src 'nonce-"+nonce+"'"));
-  assert.ok(res.headers.get('content-security-policy').includes("connect-src 'none'"));
+  assert.ok(res.headers.get('content-security-policy').includes("connect-src 'self'"));
 });
 
 test('the public Forge page does not grant access to protected API endpoints', async () => {

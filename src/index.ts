@@ -1,3 +1,6 @@
+import { issueReadCapability } from './forge-capability.ts';
+import { hasBearer, handleJournalRequest, type EventBindings } from './forge-events-api.ts';
+export { ForgeJournal } from './forge-journal.ts';
 import { forgeConsoleHtml } from './forge-console.ts';
 import { provisionAgentFork } from './agent-forks.ts';
 
@@ -45,7 +48,7 @@ interface ArtifactsBinding {
   get(name: string): Promise<ArtifactRepoHandle>;
 }
 
-interface Env {
+interface Env extends EventBindings {
   ARTIFACTS: ArtifactsBinding;
   GITFLARE_ADMIN_TOKEN: string;
 }
@@ -133,7 +136,7 @@ function forgeConsoleResponse(): Response {
     headers: {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',
-      'content-security-policy': `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,
+      'content-security-policy': `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,
       'x-content-type-options': 'nosniff',
       'referrer-policy': 'no-referrer',
       'x-frame-options': 'DENY',
@@ -142,18 +145,7 @@ function forgeConsoleResponse(): Response {
 }
 
 async function authorized(request: Request, env: Env): Promise<boolean> {
-  if (!env.GITFLARE_ADMIN_TOKEN) return false;
-  const provided = request.headers.get('authorization') ?? '';
-  const expected = `Bearer ${env.GITFLARE_ADMIN_TOKEN}`;
-  const encoder = new TextEncoder();
-  const [actualHash, expectedHash] = await Promise.all([
-    crypto.subtle.digest('SHA-256', encoder.encode(provided)),
-    crypto.subtle.digest('SHA-256', encoder.encode(expected)),
-  ]);
-  const actual = new Uint8Array(actualHash), wanted = new Uint8Array(expectedHash);
-  let different = 0;
-  for (let i = 0; i < wanted.length; i++) different |= actual[i] ^ wanted[i];
-  return different === 0;
+  return hasBearer(request, env.GITFLARE_ADMIN_TOKEN);
 }
 
 function requireString(value: unknown, label: string): string {
@@ -362,6 +354,14 @@ export default {
       }, 200, ctx.requestId));
     }
 
+    const eventMatch = /^\/forge\/events\/([^/]+)$/.exec(url.pathname);
+    if (eventMatch && (request.method === 'GET' || request.method === 'POST')) {
+      let repo: string;
+      try { repo = repoNameFromPath(eventMatch[1]); }
+      catch { return complete(ctx, json({ code: 'INVALID_REPOSITORY' }, 400, ctx.requestId)); }
+      return complete(ctx, await handleJournalRequest(request, env, repo));
+    }
+
     if (!(await authorized(request, env))) {
       emit('warn', 'auth.denied', ctx, {
         status: 401,
@@ -375,6 +375,18 @@ export default {
     }
 
     try {
+      if (request.method === 'POST' && url.pathname === '/forge/view-tokens') {
+        const body = await readJson<{ repo?: unknown }>(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          throw new GitflareError(400, 'INVALID_ARGUMENT', 'JSON object required');
+        }
+        const repo = repoNameFromPath(encodeURIComponent(requireString(body.repo, 'repo')));
+        if (!env.GITFLARE_VIEW_SIGNING_KEY || env.GITFLARE_VIEW_SIGNING_KEY.length < 32) {
+          throw new GitflareError(503, 'VIEW_SIGNER_NOT_CONFIGURED', 'View capabilities unavailable');
+        }
+        const token = await issueReadCapability(env.GITFLARE_VIEW_SIGNING_KEY, repo);
+        return complete(ctx, json({ repo, token, expiresInSeconds: 300, readOnly: true }, 201, ctx.requestId));
+      }
       if (request.method === 'GET' && url.pathname === '/repos') {
         return complete(ctx, await listRepos(request, env, ctx));
       }
