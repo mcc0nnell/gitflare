@@ -101,3 +101,12 @@ test('CLI requires signing authority and rejects malformed arguments', () => {
       '--require-check', 'test']), 1);
   } finally { f.cleanup(); }
 });
+
+test('candidate already represented in target tree is not a meaningful merge', () => {
+  const f = fixture(); try {
+    writeFileSync(join(f.repo, 'a'), 'a1\n'); git(f.repo, 'commit', '-qam', 'same content as agent');
+    const target = git(f.repo, 'rev-parse', 'main'); f.attest({ targetSha: target });
+    const result = evaluate({ ...f.p(), target });
+    assert.ok(result.reasons.includes('CANDIDATE_NO_EFFECTIVE_CHANGE'));
+  } finally { f.cleanup(); }
+});
