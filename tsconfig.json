@@ -10,7 +10,8 @@
       "DOM",
       "ESNext.Disposable"
     ],
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true
   },
   "include": [
     "src/**/*.ts"
