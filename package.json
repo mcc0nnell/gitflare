@@ -6,11 +6,12 @@
   "scripts": {
     "dev": "wrangler dev --remote",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && wrangler deploy --dry-run",
-    "deploy": "wrangler deploy"
+    "check": "npm run typecheck && npm run test:forge && wrangler deploy --dry-run",
+    "deploy": "wrangler deploy",
+    "test:forge": "node --experimental-strip-types --test tests/*.test.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3",
-    "wrangler": "4.124.0"
+    "wrangler": "4.145.0"
   }
 }
